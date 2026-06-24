@@ -16,10 +16,14 @@ from omegaconf import DictConfig
 
 @hydra.main(version_base=None, config_path="../configs", config_name="cache")
 def main(cfg: DictConfig) -> None:
-    # lazy import so `--cfg job` works pre-install
-    raise NotImplementedError(
-        "ESM3 cache generation is a step-1 scaffold; implement in kickoff step 5 "
-        "(dev 01_codebase_analysis.md §3.5, 04_training_strategy.md §10)."
+    from spa.prompt import build_cache  # lazy import so `--cfg job` works pre-install
+
+    stats = build_cache(cfg)
+    mb = stats["bytes"] / 1e6
+    print(
+        f"ESM3 cache -> {stats['out_dir']}: {stats['n_done']} written "
+        f"({mb:.1f} MB), {stats['n_skipped']} skipped, {stats['n_too_long']} over length cap, "
+        f"in {stats['seconds']}s."
     )
 
 
