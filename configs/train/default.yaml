@@ -12,3 +12,15 @@ tracker: null          # null | wandb | tensorboard  (dev 07 W5.4 — undecided;
 ckpt_every_steps: 1000
 ckpt_dir: ${paths.ckpt_dir}
 seed: 0
+max_steps: 200         # local sanity-overfit step budget (real training uses epochs over the dataset)
+n_cycle: 1             # RFD3 recycles per training forward
+capture_length: 24     # toy-overfit only: residue length for the synthetic-example capture run
+synthetic_target_offset: 3.0  # toy-overfit only: artificial target = vanilla output + this·N(0,1) Å
+
+# RFD3-native diffusion loss — values from the checkpoint's train_cfg (dev 06 step-6 mapping).
+loss:
+  sigma_data: 16
+  weight: 4.0
+  lddt_weight: 0.25
+  alpha_ligand: 10.0
+  unindexed_t_alpha: 0.75
