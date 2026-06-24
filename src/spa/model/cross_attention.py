@@ -141,4 +141,6 @@ class SPACrossAttention(nn.Module):
         out = torch.matmul(attn, v)                                                  # [D,h,I,hd]
         out = out.transpose(1, 2).reshape(D, I, self.n_head * self.head_dim)         # [D,I,c_model]
         out = self.to_out(out)                                                       # [D,I,c_query]
-        return self.lambda_scale * out
+        # Cast λ to out's dtype so the term stays in the host's compute dtype (e.g. bf16 under
+        # autocast); an fp32 λ would promote base+spa to fp32 and break the identity gate.
+        return out * self.lambda_scale.to(out.dtype)
