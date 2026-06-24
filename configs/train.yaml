@@ -1,0 +1,18 @@
+# Top-level SPA training config. Compose with overrides, e.g.:
+#   python scripts/train.py variant=B_1_by_1536 hardware=cloud_h100 train.lr=5e-5
+defaults:
+  - paths: default
+  - model: spa
+  - variant: C_n_by_1536   # primary variant; switch to B_* / A_* for ablations
+  - data: toy              # toy (local sanity) | cddb (full)
+  - hardware: local_a5000  # local_a5000 | cloud_h100  -- the ONLY thing that changes A5000->H100
+  - train: default
+  - _self_
+
+run_name: spa-${variant.name}
+
+hydra:
+  run:
+    dir: outputs/${run_name}/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: multirun/${run_name}/${now:%Y-%m-%d_%H-%M-%S}

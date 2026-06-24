@@ -1,0 +1,7 @@
+# Variant A: 1×32 CLSS structure embedding. ONLY variant that loads the CLSS checkpoint. Most lossy. (dev 03 §4)
+name: A
+projector: clss
+n_tokens: 4
+use_clss: true
+clss_model_name: CLSS-sub.lckpt   # public HF repo guyyanai/CLSS (dev root CLAUDE.md → Model Weights)
+strip_bos_eos: true

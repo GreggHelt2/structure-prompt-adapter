@@ -1,0 +1,9 @@
+# SPA cross-attention module hyperparameters (dev 03_spa_architecture.md §2, §6).
+c_query: 768          # RFD3 c_token (frozen host width — do not change)
+c_kv: 1536            # ESM3 hidden width (frozen prompt source)
+c_model: 768          # internal attention width; dev 03 §6 recommends 768 (~24M). Use 384 if VRAM tight.
+n_head: 8
+shared_kv: true       # share prompt K/V across the 18 blocks (prompt is constant) — dev 03 §6
+zero_init_output: true   # Wo zero-init -> identity-at-init (the standing correctness gate) — dev 03 §5
+lambda_init: 1.0      # training λ (identity comes from zero-init Wo, not λ); λ is the inference knob
+input_rmsnorm: true   # RMSNorm the pre-final-LayerNorm ESM3 prompt before K/V (dev 03 §2)

@@ -1,0 +1,12 @@
+# Top-level inference / validation config (dev 05_validation_pipeline.md).
+defaults:
+  - paths: default
+  - model: spa
+  - variant: C_n_by_1536
+  - hardware: local_a5000
+  - _self_
+
+ckpt: null            # path to a trained SPA ModuleList checkpoint (null -> wrapped-no-prompt baseline)
+lambda_scale: 1.0     # SPA prompt strength at inference (0 -> unconditional == vanilla RFD3)
+num_designs: 8
+out_dir: ./outputs/infer

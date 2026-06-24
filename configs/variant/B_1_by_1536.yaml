@@ -1,0 +1,6 @@
+# Variant B: 1×1536 global (mean-pooled ESM3). No CLSS. Cheapest; global "soft-fold" steering. (dev 03 §4)
+name: B
+projector: global_fanout
+n_tokens: 4              # fan the pooled vector out to M≈4 learned K/V tokens (or 1)
+strip_bos_eos: true
+use_clss: false

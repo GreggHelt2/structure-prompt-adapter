@@ -1,0 +1,11 @@
+# Local RTX A5000 (Ampere sm_86, 24 GB). (dev root CLAUDE.md → Hardware)
+# A5000 UUID masking is via the conda env vars (CUDA_VISIBLE_DEVICES=GPU-...), NOT here —
+# after masking the A5000 is simply cuda:0. Never put the UUID in config or code.
+name: local_a5000
+device: cuda:0
+precision: bf16
+batch_size: 1
+grad_accum: 8           # effective batch = batch_size * grad_accum
+protein_length_cap: 256 # VRAM-driven; keep small on 24 GB
+num_workers: 4
+fp8: false              # not available on Ampere

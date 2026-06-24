@@ -1,0 +1,10 @@
+# Cloud single H100 (Hopper sm_90, 80 GB) on a3-highgpu-1g. (dev 04 → Phase 2)
+# Single device, no masking needed (device cuda:0). Env built fresh for the H100 (not the local cu124 wheel).
+name: cloud_h100
+device: cuda:0
+precision: bf16
+batch_size: 4
+grad_accum: 2
+protein_length_cap: 512
+num_workers: 8
+fp8: false              # optional H100-only (FP8/TransformerEngine) — keep feature-flagged (dev root CLAUDE.md)

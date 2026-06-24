@@ -1,0 +1,10 @@
+# Top-level ESM3 prompt-cache generation config (dev 04 §10).
+defaults:
+  - paths: default
+  - data: toy           # toy -> small local cache on the A5000; cddb -> full (cloud H100)
+  - hardware: local_a5000
+  - _self_
+
+out_dir: ${paths.esm3_cache_dir}
+dtype: float16          # fp16 cache (dev 04: ~251 GB full)
+strip_bos_eos: true     # store per-residue prompts aligned to L (dev 01 §3.2)

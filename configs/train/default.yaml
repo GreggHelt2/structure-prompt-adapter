@@ -1,0 +1,14 @@
+# Optimizer / schedule / CFG / checkpointing (dev 04 §5–§6; 03 §8).
+epochs: 7               # dev 04 Phase 2: 7–14 epochs
+lr: 1.0e-4
+weight_decay: 0.0
+optimizer: adamw
+warmup_steps: 500
+grad_clip: 1.0
+cfg_drop_rate: 0.1     # zero-prompt dropout probability (dev 03 §8 / Q1.1: ~5–10%)
+se3_augment: true      # random-rotation augmentation on the TARGET coords (dev 03 §7)
+masked_prompt_curriculum: false  # MVP skips it (dev 07 Q5.5)
+tracker: null          # null | wandb | tensorboard  (dev 07 W5.4 — undecided; install `[tracking]` if wandb)
+ckpt_every_steps: 1000
+ckpt_dir: ${paths.ckpt_dir}
+seed: 0

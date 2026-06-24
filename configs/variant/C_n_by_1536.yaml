@@ -1,0 +1,6 @@
+# Variant C (PRIMARY): N×1536 per-residue ESM3 prompt. No CLSS. (dev 03 §4)
+name: C
+projector: identity      # identity (M=N) for residue-resolution control...
+resampler_tokens: null   # ...or set an int (e.g. 64) to compress N -> fixed M via a Perceiver Resampler (bounds long-N cost)
+strip_bos_eos: true      # align prompt to RFD3's L residues (dev 01 §3.2)
+use_clss: false

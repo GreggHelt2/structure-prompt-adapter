@@ -1,0 +1,5 @@
+# Small local subset for pipeline testing (dev root CLAUDE.md → Training Data → toy/).
+name: toy
+root: ${paths.data_root}/toy
+manifest: null          # null -> enumerate PDBs directly under `root`
+length_cap: 256         # residues; keep small to fit the A5000

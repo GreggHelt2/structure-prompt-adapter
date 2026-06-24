@@ -1,0 +1,6 @@
+# CDDB primary dataset: 455,473 structures; leakage-safe MMseqs2 cluster splits (dev 04).
+name: cddb
+root: ${paths.data_root}/processed
+manifest: ${paths.data_root}/splits   # train/validate/test manifests (built in kickoff step 8)
+filter_rmsd_ca_max: 2.0  # Å — keep structures with rmsd_ca <= this (dev 04 filter)
+length_cap: 512
