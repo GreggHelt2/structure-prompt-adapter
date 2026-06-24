@@ -1,0 +1,7 @@
+# Top-level config for building train/validate/test splits over CDDB (kickoff step 8 Part A).
+#   conda run -n spa-dev python scripts/build_splits.py
+#   conda run -n spa-dev python scripts/build_splits.py data.split.seed=1 data.split.ratios.train=0.9
+defaults:
+  - paths: default
+  - data: cddb
+  - _self_

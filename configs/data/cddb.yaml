@@ -1,6 +1,31 @@
-# CDDB primary dataset: 455,473 structures; leakage-safe MMseqs2 cluster splits (dev 04).
+# CDDB primary dataset: 455,473 single-chain structures. CDDB is one structure per Foldseek
+# (structural) cluster of AFDB -> already structurally de-duplicated, so a simple length-stratified
+# random split is leakage-safe at the structural level (dev 04 §2 / 07 I.9). NO clustering / NO MMseqs2.
 name: cddb
-root: ${paths.data_root}/processed
-manifest: ${paths.data_root}/splits   # train/validate/test manifests (built in kickoff step 8)
-filter_rmsd_ca_max: 2.0  # Å — keep structures with rmsd_ca <= this (dev 04 filter)
-length_cap: 512
+
+# Raw CDDB release (source structures + per-structure metadata).
+pdb_dir: ${paths.data_root}/proteina-atomistica_data_vrelease/atomistica_data_release/pdb
+metadata_parquet: ${paths.data_root}/proteina-atomistica_data_vrelease/atomistica_data_release/metadata/metadata_atomistica_syn_release.parquet
+
+# Split artifacts (built by scripts/build_splits.py — kickoff step 8 Part A):
+#   master:    ${master_manifest}                       every id + metadata + assigned split
+#   per-split: ${splits_root}/{train,validate,test}/manifest.parquet
+splits_root: ${paths.data_root}
+master_manifest: ${paths.data_root}/processed/splits.parquet
+
+# Split construction (consumed by build_splits.py). Filtering is deliberately LIGHT (dev 04 §1):
+# pLDDT/length were already applied at CDDB construction, and the rmsd_ca designability cut is
+# SKIPPED by default — the CDDB paper's own ablation shows it hurts diversity & co-designability
+# (07 I.9). rmsd_ca is retained as a manifest column (soft knob), not a hard filter.
+split:
+  seed: 0
+  ratios: {train: 0.8, validate: 0.1, test: 0.1}
+  stratify_by: length        # length-stratified shuffle; set null for plain random
+  n_length_bins: 20
+  filter_rmsd_ca_max: null   # null = keep all; set e.g. 2.0 ONLY to experiment with the cut
+  min_length: null
+  max_length: null           # do NOT cap at split time — the length cap is a runtime view (below)
+
+# Runtime dataloader view (VRAM lever; NOT baked into the splits). Overridden per hardware
+# (A5000 small, H100 larger). Structures longer than this are skipped at load time.
+length_cap: 256
