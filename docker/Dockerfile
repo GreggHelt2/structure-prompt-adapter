@@ -65,5 +65,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends unzip \
     && ln -s /opt/ngc-cli/ngc /usr/local/bin/ngc \
     && rm -rf /var/lib/apt/lists/*
 
+# GPU exposure for the nvidia-container runtime (Vertex GPU jobs / docker --gpus). The slim base lacks
+# these; without NVIDIA_DRIVER_CAPABILITIES=compute the CUDA *driver* libs aren't mounted into the
+# container -> torch.cuda.is_available()=False (the 0.2.0 benchmark failed exactly here).
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
 WORKDIR /workspace
 CMD ["/bin/bash"]

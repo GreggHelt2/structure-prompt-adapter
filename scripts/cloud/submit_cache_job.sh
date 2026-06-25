@@ -19,7 +19,7 @@ set -euo pipefail
 
 PROJECT="${PROJECT:-spa-dev-499900}"
 REGION="${REGION:-us-central1}"
-IMAGE="${IMAGE:-us-central1-docker.pkg.dev/spa-dev-499900/spa/spa-cloud:0.2.0}"
+IMAGE="${IMAGE:-us-central1-docker.pkg.dev/spa-dev-499900/spa/spa-cloud:0.3.0}"
 SA="${SA:-spa-worker@spa-dev-499900.iam.gserviceaccount.com}"
 REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
