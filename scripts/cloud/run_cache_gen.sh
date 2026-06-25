@@ -86,7 +86,7 @@ log "ESM3 cache-gen (limit=${LIMIT:-all}) -> $CACHE_DIR"
 t_gen=$SECONDS
 python "$SPA_REPO/scripts/gen_esm3_cache.py" \
     data=cddb hardware=cloud_h100 \
-    data.pdb_dir="$PDB_DIR" out_dir="$CACHE_DIR" $LIMIT_ARG
+    data.pdb_dir="$PDB_DIR" out_dir="$CACHE_DIR" data.length_cap="${LENGTH_CAP:-512}" $LIMIT_ARG
 gen_secs=$((SECONDS-t_gen))
 n_pt=$(find "$CACHE_DIR" -name '*.pt' | wc -l)
 cache_mb=$(du -sm "$CACHE_DIR" | cut -f1)

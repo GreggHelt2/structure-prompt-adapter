@@ -9,3 +9,4 @@ out_dir: ${paths.esm3_cache_dir}
 dtype: float16          # fp16 cache (dev 04: ~251 GB full)
 strip_bos_eos: true     # store per-residue prompts aligned to L (dev 01 §3.2)
 limit: null             # cap #structures processed (e.g. limit=1000 for the cloud benchmark); null = all
+progress_every_sec: 60  # live [progress] log cadence during cache-gen (stdout -> Cloud Logging)

@@ -108,19 +108,36 @@ def build_cache(cfg, esm3_model=None) -> dict:
     if limit is not None:
         pdbs = pdbs[: int(limit)]
     stats = {"n_done": 0, "n_skipped": 0, "n_too_long": 0, "bytes": 0, "out_dir": str(out_dir)}
+    total = len(pdbs)
+    prog_sec = float(cfg.get("progress_every_sec", 60))  # live [progress] cadence; stdout -> Cloud Logging
     t0 = time.time()
-    for pdb in pdbs:
+    last_log = t0
+    print(f"[progress] start: {total} structures, length_cap={length_cap}, out={out_dir}", flush=True)
+    for i, pdb in enumerate(pdbs):
         dst = out_dir / f"{pdb.stem}.pt"
         if dst.exists():
             stats["n_skipped"] += 1
-            continue
-        emb = esm3_prompt(pdb, model, strip_bos_eos=cfg.strip_bos_eos)
-        if length_cap is not None and emb.shape[0] > length_cap:
-            stats["n_too_long"] += 1
-            continue
-        emb = emb.to("cpu", save_dtype).contiguous()
-        torch.save(emb, dst)
-        stats["n_done"] += 1
-        stats["bytes"] += dst.stat().st_size
+        else:
+            emb = esm3_prompt(pdb, model, strip_bos_eos=cfg.strip_bos_eos)
+            if length_cap is not None and emb.shape[0] > length_cap:
+                stats["n_too_long"] += 1
+            else:
+                emb = emb.to("cpu", save_dtype).contiguous()
+                torch.save(emb, dst)
+                stats["n_done"] += 1
+                stats["bytes"] += dst.stat().st_size
+        now = time.time()
+        if now - last_log >= prog_sec or i + 1 == total:
+            done, el = i + 1, now - t0
+            rate = done / el if el > 0 else 0.0
+            eta_h = (total - done) / rate / 3600 if rate > 0 else 0.0
+            print(
+                f"[progress] {done}/{total} ({100.0 * done / total:.1f}%) | "
+                f"cached={stats['n_done']} toolong={stats['n_too_long']} skip={stats['n_skipped']} | "
+                f"{rate:.1f} prot/s | elapsed {el / 60:.1f} min | ETA {eta_h:.2f} h | "
+                f"cache {stats['bytes'] / 1e9:.2f} GB",
+                flush=True,
+            )
+            last_log = now
     stats["seconds"] = round(time.time() - t0, 2)
     return stats
