@@ -86,8 +86,9 @@ def esm3_prompt(structure, esm3_model, strip_bos_eos: bool = True,
 def build_cache(cfg, esm3_model=None) -> dict:
     """Generate a per-residue ESM3 prompt cache over a dataset split (kickoff step 5 / cloud step 9).
 
-    Reads PDBs under ``cfg.data.root``, writes one ``<stem>.pt`` per structure to ``cfg.out_dir`` in
-    ``cfg.dtype`` (skipping existing). Returns summary stats.
+    Reads PDBs under ``cfg.data.pdb_dir`` (CDDB) or ``cfg.data.root`` (toy), writes one ``<stem>.pt`` per
+    structure to ``cfg.out_dir`` in ``cfg.dtype`` (skipping existing). ``cfg.limit`` caps the number of
+    structures (e.g. the cloud ~1k benchmark). Returns summary stats.
     """
     from spa.utils.device import resolve_device
 
@@ -97,8 +98,15 @@ def build_cache(cfg, esm3_model=None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     save_dtype = DTYPES[cfg.dtype]
     length_cap = cfg.data.get("length_cap", None)
+    limit = cfg.get("limit", None)  # cap #structures (e.g. the cloud ~1k benchmark); None = all
 
-    pdbs = sorted(Path(cfg.data.root).glob("*.pdb"))
+    # toy uses `root`; CDDB uses `pdb_dir` (overridable to the cloud untar location).
+    pdb_root = cfg.data.get("pdb_dir") or cfg.data.get("root")
+    if pdb_root is None:
+        raise ValueError("data config must set `pdb_dir` (CDDB) or `root` (toy)")
+    pdbs = sorted(Path(pdb_root).glob("*.pdb"))
+    if limit is not None:
+        pdbs = pdbs[: int(limit)]
     stats = {"n_done": 0, "n_skipped": 0, "n_too_long": 0, "bytes": 0, "out_dir": str(out_dir)}
     t0 = time.time()
     for pdb in pdbs:
