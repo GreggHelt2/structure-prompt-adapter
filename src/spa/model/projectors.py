@@ -92,6 +92,26 @@ class CLSSProjector(nn.Module):
         return self.norm(self.fanout(z).view(D, self.n_tokens, self.c_kv))   # [D, n_tokens, c_kv]
 
 
+class GlobalFanoutProjector(nn.Module):
+    """Variant B front-end: mean-pool the ESM3 prompt to a 1×1536 global vector, then fan it out to
+    ``n_tokens`` learned prompt tokens — like variant A but WITHOUT the CLSS contrastive head (the
+    global vector is the raw mean-pooled ESM3 embedding; dev ``03`` §4). All-trainable; no CLSS dep.
+    """
+
+    def __init__(self, variant_cfg, c_kv: int = 1536) -> None:
+        super().__init__()
+        self.n_tokens = int(variant_cfg.n_tokens)
+        self.c_kv = c_kv
+        self.fanout = nn.Linear(c_kv, self.n_tokens * c_kv)
+        self.norm = nn.LayerNorm(c_kv)
+        nn.init.xavier_uniform_(self.fanout.weight)
+        nn.init.zeros_(self.fanout.bias)
+
+    def forward(self, prompt: torch.Tensor) -> torch.Tensor:  # [D,N,c_kv] -> [D, n_tokens, c_kv]
+        D = prompt.shape[0]
+        return self.norm(self.fanout(prompt.mean(dim=1)).view(D, self.n_tokens, self.c_kv))
+
+
 def make_projector(variant_cfg, c_kv: int = 1536) -> nn.Module:
     """Build the front-end projector for a variant config (``configs/variant/*.yaml``)."""
     name = variant_cfg.projector
@@ -102,7 +122,7 @@ def make_projector(variant_cfg, c_kv: int = 1536) -> nn.Module:
             )
         return IdentityProjector()
     if name == "global_fanout":
-        raise NotImplementedError("Variant B global fan-out projector — TODO (dev 03 §4).")
+        return GlobalFanoutProjector(variant_cfg, c_kv=c_kv)
     if name == "clss":
         return CLSSProjector(variant_cfg, c_kv=c_kv)
     raise ValueError(f"unknown projector {name!r} (expected identity | global_fanout | clss)")

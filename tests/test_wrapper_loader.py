@@ -94,6 +94,13 @@ def _cfg_clss(n_tokens: int = 4):
     return cfg
 
 
+def _cfg_global(n_tokens: int = 4):
+    cfg = _cfg()
+    cfg.variant = OmegaConf.create({"name": "B", "projector": "global_fanout", "n_tokens": n_tokens,
+                                    "use_clss": False, "strip_bos_eos": True})
+    return cfg
+
+
 def test_attach_wraps_all_blocks():
     model = FakeRFD3()
     adapter = attach_spa(model, _cfg())
@@ -225,3 +232,37 @@ def test_variant_a_drops_mismatched_prompt_mask():
     adapter = attach_spa(FakeRFD3(), _cfg_clss(n_tokens=4))
     adapter.set_prompt(torch.randn(D, N, C_KV), key_padding_mask=torch.zeros(D, N, dtype=torch.bool))
     assert adapter.context.key_padding_mask is None
+
+
+# --- Variant B (1×1536 mean-pooled ESM3, no CLSS) --------------------------------------------------
+
+def test_variant_b_projector_shape_and_all_trainable():
+    from spa.model.projectors import GlobalFanoutProjector
+
+    adapter = attach_spa(FakeRFD3(), _cfg_global(n_tokens=4))
+    proj = adapter.projector
+    assert isinstance(proj, GlobalFanoutProjector)
+    assert all(p.requires_grad for p in adapter.parameters())   # no frozen encoder (unlike A)
+    assert proj(torch.randn(D, N, C_KV)).shape == (D, 4, C_KV)
+
+
+def test_variant_b_identity_at_init():
+    model = FakeRFD3()
+    A_I = torch.randn(D, I, C_QUERY)
+    vanilla = model.run_blocks(A_I)
+    adapter = attach_spa(model, _cfg_global())
+    adapter.set_prompt(torch.randn(D, N, C_KV))
+    assert torch.equal(vanilla, model.run_blocks(A_I))
+
+
+def test_variant_b_grows_in_and_drops_mismatched_mask():
+    model = FakeRFD3()
+    A_I = torch.randn(D, I, C_QUERY)
+    vanilla = model.run_blocks(A_I)
+    adapter = attach_spa(model, _cfg_global(n_tokens=4))
+    for ca in adapter.cross_attn:
+        nn.init.xavier_uniform_(ca.to_out.weight)
+    adapter.set_prompt(torch.randn(D, N, C_KV), key_padding_mask=torch.zeros(D, N, dtype=torch.bool))
+    assert adapter.context.key_padding_mask is None             # N-mask can't fit 4 tokens -> dropped
+    out = model.run_blocks(A_I)
+    assert not torch.allclose(vanilla, out) and torch.isfinite(out).all()
