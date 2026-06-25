@@ -8,7 +8,8 @@ REGION="${2:-us-central1}"
 PROJECT="${3:-spa-dev-499900}"
 GC=/home/user1/google-cloud-sdk/bin/gcloud
 
-echo "state: $("$GC" ai custom-jobs describe "$JOBID" --region="$REGION" --project="$PROJECT" --format='value(state)' 2>/dev/null)"
+read -r STATE CREATE < <("$GC" ai custom-jobs describe "$JOBID" --region="$REGION" --project="$PROJECT" --format='value(state,createTime)' 2>/dev/null)
+echo "state: ${STATE:-?}   (elapsed ~$(( ( $(date +%s) - $(date -d "${CREATE:-now}" +%s 2>/dev/null || date +%s) ) / 60 )) min since create)"
 echo "=== container logs (framework-provisioning lines filtered) ==="
 "$GC" logging read "resource.type=\"ml_job\" AND resource.labels.job_id=\"$JOBID\"" \
   --project="$PROJECT" --order=asc --limit=200 --format="value(textPayload)" 2>&1 \
