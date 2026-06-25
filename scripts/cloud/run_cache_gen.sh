@@ -20,6 +20,8 @@ GCS_PREFIX="${GCS_PREFIX:-esm3_cache}"
 LIMIT="${LIMIT:-}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 NGC_RESOURCE="nvidia/clara/proteina-atomistica_data:release"
+CKPT_PREFIX="${CKPT_PREFIX:-$BUCKET/${GCS_PREFIX}.ckpt}"   # incremental per-file checkpoint (crash recovery)
+CHECKPOINT_SEC="${CHECKPOINT_SEC:-1800}"                   # bg rsync cadence (30 min); 0 disables (short probes)
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 trap 'log "FAILED at line $LINENO"' ERR
@@ -92,12 +94,40 @@ log "download+untar ${SECONDS}-${t_dl}=$((SECONDS-t_dl))s; PDB dir: $PDB_DIR ($(
 log "pip install -e SPA (--no-deps)"
 pip install -e "$SPA_REPO" --no-deps -q
 LIMIT_ARG=""; [ -n "$LIMIT" ] && LIMIT_ARG="limit=$LIMIT"
+
+# Resume: if a prior run left a checkpoint, pull it so the producer's atomic dst.exists() skip continues.
+if [ -n "$(gcloud storage ls "$CKPT_PREFIX/**" 2>/dev/null | head -1)" ]; then
+  log "RESUME: checkpoint at $CKPT_PREFIX -> rsync down into $CACHE_DIR"
+  gcloud storage rsync -r "$CKPT_PREFIX" "$CACHE_DIR" || log "  (resume rsync issues; continuing)"
+  log "RESUME: $(find "$CACHE_DIR" -name '*.pt' | wc -l) .pt already present"
+fi
+
+# Background checkpoint: incrementally rsync the cache up every CHECKPOINT_SEC (atomic saves => no partials).
+# Decoupled from the producer; failures here never touch the main loop. CHECKPOINT_SEC=0 disables it.
+CKPT_PID=""
+if [ "${CHECKPOINT_SEC:-0}" -gt 0 ]; then
+  ( while sleep "$CHECKPOINT_SEC"; do
+      gcloud storage rsync -r "$CACHE_DIR" "$CKPT_PREFIX" >/dev/null 2>&1 \
+        && log "checkpoint: $(find "$CACHE_DIR" -name '*.pt' | wc -l) .pt -> $CKPT_PREFIX" || true
+    done ) &
+  CKPT_PID=$!
+  trap '[ -n "${CKPT_PID:-}" ] && kill "$CKPT_PID" 2>/dev/null || true' EXIT
+  log "background checkpoint every ${CHECKPOINT_SEC}s (pid $CKPT_PID) -> $CKPT_PREFIX"
+fi
+
 log "ESM3 cache-gen (limit=${LIMIT:-all}) -> $CACHE_DIR"
 t_gen=$SECONDS
 python "$SPA_REPO/scripts/gen_esm3_cache.py" \
     data=cddb hardware=cloud_h100 \
     data.pdb_dir="$PDB_DIR" out_dir="$CACHE_DIR" data.length_cap="${LENGTH_CAP:-512}" $LIMIT_ARG
 gen_secs=$((SECONDS-t_gen))
+
+# Producer done: stop the bg checkpoint + one final catch-up rsync (covers files since the last tick).
+if [ -n "$CKPT_PID" ]; then
+  kill "$CKPT_PID" 2>/dev/null || true; wait "$CKPT_PID" 2>/dev/null || true
+  log "final checkpoint rsync -> $CKPT_PREFIX"
+  gcloud storage rsync -r "$CACHE_DIR" "$CKPT_PREFIX" || true
+fi
 n_pt=$(find "$CACHE_DIR" -name '*.pt' | wc -l)
 cache_mb=$(du -sm "$CACHE_DIR" | cut -f1)
 
@@ -105,7 +135,7 @@ cache_mb=$(du -sm "$CACHE_DIR" | cut -f1)
 # ~358k tiny .pt objects make the later GCS->NVMe pull request-rate-bound (per-object GET + listing) on
 # EVERY training run; one tar makes it bandwidth-bound. Tar to disk FIRST (not stream) so the upload is a
 # *resumable, parallel* gcloud cp of a single file — robust after the ~11h run (a blip resumes vs restarts;
-# the tar persists for re-upload). Costs ~1x extra disk transiently -> size the boot disk ~500GB (cheap, ~$1).
+# the tar persists for re-upload). Costs ~1x extra disk transiently -> size the boot disk ~650GB (cheap, ~$2).
 TAR_URI="${TAR_URI:-$BUCKET/${GCS_PREFIX}.tar}"
 TAR_LOCAL="${TAR_LOCAL:-$(dirname "$CACHE_DIR")/esm3_cache.tar}"
 # Free the CDDB PDBs (~62 GB) before taring -> lowers peak disk to ~2x cache (the precheck assumes this).
@@ -120,6 +150,11 @@ for attempt in 1 2 3 4 5; do
   [ "$attempt" = 5 ] && { log "FATAL: upload failed after 5 attempts (tar kept at $TAR_LOCAL)"; exit 1; }
   log "upload failed; retry in 30s"; sleep 30
 done
+# Tar is the deliverable now -> the checkpoint's per-file objects are redundant; remove them.
+if [ "${CHECKPOINT_SEC:-0}" -gt 0 ]; then
+  log "cleanup: removing checkpoint $CKPT_PREFIX"
+  gcloud storage rm -r "$CKPT_PREFIX" 2>/dev/null || log "  (no checkpoint to remove)"
+fi
 
 # --- 7) Benchmark summary (feeds the Gate-B extrapolation) ----------------------------------------
 log "===== SUMMARY ====="
