@@ -25,7 +25,8 @@ REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
 LIMIT="${LIMIT-1000}"               # default benchmark; LIMIT= (empty) -> full run
 DISK_GB="${DISK_GB:-200}"           # benchmark uses ~65GB; full run ~302GB (bump, or local SSD per W5.3)
-STRATEGY="${STRATEGY:-SPOT}"        # SPOT (benchmark) | FLEX_START (full run, uninterrupted)
+STRATEGY="${STRATEGY:-ONDEMAND}"    # ONDEMAND -> "Custom model training Nvidia H100 GPUs" quota (approved 1+1).
+                                    # SPOT | FLEX_START use the *preemptible* H100 quota (separate bucket, =0 here).
 NAME="${NAME:-spa-cachegen-$(date -u +%Y%m%d-%H%M%S)}"
 GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
 
@@ -36,6 +37,8 @@ cat > "${CFG}" <<YAML
 workerPoolSpecs:
   - machineSpec:
       machineType: a3-highgpu-1g
+      acceleratorType: NVIDIA_H100_80GB
+      acceleratorCount: 1
     replicaCount: 1
     diskSpec:
       bootDiskType: pd-ssd
@@ -47,9 +50,15 @@ workerPoolSpecs:
       env:
         - name: LIMIT
           value: "${LIMIT}"
-scheduling:
-  strategy: ${STRATEGY}
 YAML
+
+# On-demand (default) uses the non-preemptible "Custom model training Nvidia H100 GPUs" quota and OMITS
+# the scheduling block (Vertex defaults to on-demand). SPOT/FLEX_START use the separate *preemptible*
+# H100 quota — opt in via STRATEGY=SPOT|FLEX_START.
+case "${STRATEGY}" in
+  ONDEMAND|STANDARD|on-demand|"") : ;;
+  *) printf 'scheduling:\n  strategy: %s\n' "${STRATEGY}" >> "${CFG}" ;;
+esac
 
 echo ">>> CustomJobSpec (${CFG}):"; sed 's/^/    /' "${CFG}"
 echo ">>> name=${NAME}  region=${REGION}  sa=${SA}  limit=${LIMIT:-<all>}  strategy=${STRATEGY}  disk=${DISK_GB}GB"
