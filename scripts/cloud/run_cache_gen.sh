@@ -18,13 +18,26 @@ PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 GCS_PREFIX="${GCS_PREFIX:-esm3_cache}"
 LIMIT="${LIMIT:-}"
-DATA_DIR="${DATA_DIR:-/workspace/data}"
-CACHE_DIR="${CACHE_DIR:-/workspace/cache}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 NGC_RESOURCE="nvidia/clara/proteina-atomistica_data:release"
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 trap 'log "FAILED at line $LINENO"' ERR
+
+# --- 0) Disk diagnostic + scratch auto-detect (resolves W5.3: does the a3 local-SSD RAID0 reach us?) -
+log "DISK DIAGNOSTIC (lsblk / df / ssd-nvme-md mounts):"
+{ lsblk -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null; echo "-- df -h --"; df -h 2>/dev/null; \
+  echo "-- ssd/nvme/md mounts --"; mount 2>/dev/null | grep -iE "ssd|nvme|md[0-9]|local"; } | sed 's/^/  /' || true
+# Prefer a large local-SSD scratch if Vertex's DLVM auto-RAID0 exposed one to our container; else /workspace.
+if [ -z "${SCRATCH:-}" ]; then
+  for cand in /mnt/local_ssd /mnt/disks/local_ssd /mnt/disks/ssd0 /mnt/stateful_partition; do
+    if mount 2>/dev/null | grep -q " on $cand " && [ -w "$cand" ]; then SCRATCH="$cand"; break; fi
+  done
+fi
+SCRATCH="${SCRATCH:-/workspace}"
+log "SCRATCH=$SCRATCH ($(df -h "$SCRATCH" 2>/dev/null | awk 'NR==2{print $4" free / "$2}'))"
+DATA_DIR="${DATA_DIR:-$SCRATCH/data}"
+CACHE_DIR="${CACHE_DIR:-$SCRATCH/cache}"
 
 # --- 1) Secrets (job runs as spa-worker; ADC via the metadata server) -----------------------------
 log "fetching secrets from Secret Manager"
@@ -78,9 +91,18 @@ gen_secs=$((SECONDS-t_gen))
 n_pt=$(find "$CACHE_DIR" -name '*.pt' | wc -l)
 cache_mb=$(du -sm "$CACHE_DIR" | cut -f1)
 
-# --- 6) Upload to GCS -----------------------------------------------------------------------------
-log "rsync cache -> $BUCKET/$GCS_PREFIX"
-gcloud storage rsync -r "$CACHE_DIR" "$BUCKET/$GCS_PREFIX"
+# --- 6) Pack into ONE tar (to disk) and upload to GCS ---------------------------------------------
+# ~358k tiny .pt objects make the later GCS->NVMe pull request-rate-bound (per-object GET + listing) on
+# EVERY training run; one tar makes it bandwidth-bound. Tar to disk FIRST (not stream) so the upload is a
+# *resumable, parallel* gcloud cp of a single file — robust after the ~11h run (a blip resumes vs restarts;
+# the tar persists for re-upload). Costs ~1x extra disk transiently -> size the boot disk ~500GB (cheap, ~$1).
+TAR_URI="${TAR_URI:-$BUCKET/${GCS_PREFIX}.tar}"
+TAR_LOCAL="${TAR_LOCAL:-$(dirname "$CACHE_DIR")/esm3_cache.tar}"
+log "tar $n_pt .pt files -> $TAR_LOCAL"
+tar -cf "$TAR_LOCAL" -C "$CACHE_DIR" .
+log "upload $TAR_LOCAL ($(du -h "$TAR_LOCAL" 2>/dev/null | cut -f1)) -> $TAR_URI (resumable, parallel)"
+gcloud storage cp "$TAR_LOCAL" "$TAR_URI"
+log "uploaded single tar: $TAR_URI"
 
 # --- 7) Benchmark summary (feeds the Gate-B extrapolation) ----------------------------------------
 log "===== SUMMARY ====="
