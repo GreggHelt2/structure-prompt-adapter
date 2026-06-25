@@ -21,7 +21,7 @@ LIMIT="${LIMIT:-}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 NGC_RESOURCE="nvidia/clara/proteina-atomistica_data:release"
 CKPT_PREFIX="${CKPT_PREFIX:-$BUCKET/${GCS_PREFIX}.ckpt}"   # incremental per-file checkpoint (crash recovery)
-CHECKPOINT_SEC="${CHECKPOINT_SEC:-1800}"                   # bg rsync cadence (30 min); 0 disables (short probes)
+CHECKPOINT_SEC="${CHECKPOINT_SEC:-3600}"                   # bg rsync cadence (1 hr); 0 disables (short probes)
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 trap 'log "FAILED at line $LINENO"' ERR
