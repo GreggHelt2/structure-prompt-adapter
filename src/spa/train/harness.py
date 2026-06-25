@@ -164,7 +164,10 @@ def train(cfg) -> None:
     adapter = attach_spa(net, cfg).to(device)
     set_host_train_mode(net)
     loss_fn = build_loss(cfg).to(device)
-    opt = torch.optim.AdamW(adapter.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+    # train only requires_grad params — a variant may include a FROZEN encoder in the adapter
+    # (e.g. variant-A's CLSS structure_adapter), which must stay out of the optimizer.
+    trainable = [p for p in adapter.parameters() if p.requires_grad]
+    opt = torch.optim.AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
     gen = torch.Generator().manual_seed(cfg.train.seed)
     stream = _example_stream(cfg, engine, net, device)
 

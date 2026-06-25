@@ -10,8 +10,9 @@ being the ``LocalAttentionPairBias`` SPA wraps (``blocks.py:674``).
 ``attach_spa`` builds a single :class:`~spa.model.wrapper.SPAAdapter` (front-end projector + shared
 ``SPAPromptKV`` + a per-block ``SPACrossAttention`` ``ModuleList``), replaces each block's
 ``attention_pair_bias`` with an :class:`~spa.model.wrapper.SPAWrappedAttention`, freezes the host,
-then re-enables the SPA params. Returns the adapter — its ``.parameters()`` are exactly the
-trainable SPA params, and it owns the prompt side-channel (``set_prompt`` / ``set_scale``).
+then re-enables the collaterally-frozen SPA cross-attn. Returns the adapter — its ``.parameters()``
+are the SPA params (a variant's frozen encoder, e.g. variant-A's CLSS adapter, is included but stays
+non-trainable), and it owns the prompt side-channel (``set_prompt`` / ``set_scale``).
 """
 
 from __future__ import annotations
@@ -101,6 +102,10 @@ def attach_spa(model: nn.Module, cfg) -> SPAAdapter:
         setattr(block, RFD3_ATTENTION_ATTR,
                 SPAWrappedAttention(orig=orig, context=context, spa=cross_attn[i]))
 
-    freeze_host(model)            # freezes RFD3 (and, collaterally, the wrapped SPA modules)...
-    adapter.requires_grad_(True)  # ...then re-enable exactly the SPA params
+    # freeze_host(model) freezes RFD3 AND — as a side effect — the SPA cross-attn modules, since they
+    # now live INSIDE the wrapped RFD3 blocks. Undo exactly that side effect by re-enabling cross_attn;
+    # the standalone projector + prompt_kv were never frozen, so their as-built requires_grad is kept
+    # (e.g. variant-A's frozen CLSS structure_adapter stays frozen, its trainable fan-out stays trainable).
+    freeze_host(model)
+    adapter.cross_attn.requires_grad_(True)
     return adapter

@@ -6,6 +6,7 @@ host mirrors the real attribute chain ``diffusion_module.diffusion_transformer.b
 attention_pair_bias`` and the ``forward(Q_L, C_L, P_LL, **kwargs) -> [D,I,768]`` residual contract.
 """
 
+import pytest
 import torch
 from omegaconf import OmegaConf
 from torch import nn
@@ -69,6 +70,28 @@ def _cfg():
                         "strip_bos_eos": True, "use_clss": False},
         }
     )
+
+
+def _clss_cached() -> bool:
+    """True iff the CLSS ckpt is already in the HF cache (so variant-A tests need no network)."""
+    try:
+        from huggingface_hub import hf_hub_download
+
+        hf_hub_download("guyyanai/CLSS", "CLSS-sub.lckpt", local_files_only=True)
+        return True
+    except Exception:
+        return False
+
+
+clss_only = pytest.mark.skipif(not _clss_cached(), reason="CLSS ckpt not in the HF cache")
+
+
+def _cfg_clss(n_tokens: int = 4):
+    cfg = _cfg()
+    cfg.variant = OmegaConf.create({"name": "A", "projector": "clss", "n_tokens": n_tokens,
+                                    "use_clss": True, "clss_model_name": "CLSS-sub.lckpt",
+                                    "strip_bos_eos": True})
+    return cfg
 
 
 def test_attach_wraps_all_blocks():
@@ -154,3 +177,51 @@ def test_per_block_kv_not_yet_supported():
     except NotImplementedError:
         return
     raise AssertionError("expected NotImplementedError for per-block K/V")
+
+
+# --- Variant A (CLSS 1×32) -------------------------------------------------------------------------
+
+@clss_only
+def test_variant_a_projector_shape_and_freeze():
+    from spa.model.projectors import CLSSProjector
+
+    adapter = attach_spa(FakeRFD3(), _cfg_clss(n_tokens=4))
+    proj = adapter.projector
+    assert isinstance(proj, CLSSProjector)
+    # the loaded CLSS structure_adapter is FROZEN; the trainable fan-out is on (the freeze-hook fix)
+    assert all(not p.requires_grad for p in proj.structure_adapter.parameters())
+    assert all(p.requires_grad for p in proj.fanout.parameters())
+    # N×1536 per-residue prompt -> n_tokens fanned tokens
+    assert proj(torch.randn(D, N, C_KV)).shape == (D, 4, C_KV)
+
+
+@clss_only
+def test_variant_a_identity_at_init():
+    # zero-init Wo => SPA term 0 even WITH a prompt; variant A still reproduces vanilla at init.
+    model = FakeRFD3()
+    A_I = torch.randn(D, I, C_QUERY)
+    vanilla = model.run_blocks(A_I)
+    adapter = attach_spa(model, _cfg_clss())
+    adapter.set_prompt(torch.randn(D, N, C_KV))
+    assert torch.equal(vanilla, model.run_blocks(A_I))
+
+
+@clss_only
+def test_variant_a_grows_in_and_changes_output():
+    model = FakeRFD3()
+    A_I = torch.randn(D, I, C_QUERY)
+    vanilla = model.run_blocks(A_I)
+    adapter = attach_spa(model, _cfg_clss())
+    for ca in adapter.cross_attn:                  # simulate a grown-in Wo after training
+        nn.init.xavier_uniform_(ca.to_out.weight)
+    adapter.set_prompt(torch.randn(D, N, C_KV))
+    out = model.run_blocks(A_I)
+    assert not torch.allclose(vanilla, out) and torch.isfinite(out).all()
+
+
+@clss_only
+def test_variant_a_drops_mismatched_prompt_mask():
+    # variant A reduces N -> n_tokens, so a per-residue [D,N] mask can't apply -> dropped (no crash).
+    adapter = attach_spa(FakeRFD3(), _cfg_clss(n_tokens=4))
+    adapter.set_prompt(torch.randn(D, N, C_KV), key_padding_mask=torch.zeros(D, N, dtype=torch.bool))
+    assert adapter.context.key_padding_mask is None

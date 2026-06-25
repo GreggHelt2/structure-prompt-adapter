@@ -110,6 +110,10 @@ class SPAAdapter(nn.Module):
     def set_prompt(self, prompt: torch.Tensor, key_padding_mask: torch.Tensor | None = None) -> None:
         """Project ``prompt`` ``[D, N, c_kv]`` and stash K/V on the shared context (once per design)."""
         p = self.projector(prompt)
+        if key_padding_mask is not None and key_padding_mask.shape[-1] != p.shape[1]:
+            # a projector that changes the token count (e.g. variant-A global CLSS: M=n_tokens≠N)
+            # invalidates a per-residue mask -> drop it (per-residue non-overlap is variant-C only).
+            key_padding_mask = None
         k, v = self.prompt_kv(p)
         self._context.k, self._context.v, self._context.key_padding_mask = k, v, key_padding_mask
 
