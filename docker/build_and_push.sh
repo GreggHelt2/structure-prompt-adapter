@@ -19,7 +19,7 @@ set -euo pipefail
 REGION="${REGION:-us-central1}"
 PROJECT="${PROJECT:-spa-dev-499900}"
 REPO="${REPO:-spa}"
-TAG="${TAG:-0.1.0}"
+TAG="${TAG:-0.2.0}"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/spa-cloud:${TAG}"
 
 cd "$(dirname "$0")"

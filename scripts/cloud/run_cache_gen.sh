@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# In-container orchestration for Phase-1 ESM3 cache-gen (or the ~1k benchmark via LIMIT).
+# Runs inside the SPA cloud image on a Vertex Custom Job (a3-highgpu-1g, as the spa-worker SA).
+# dev 04 §10 / 08 step 9. Gate A (ESM3 + NGC canaries) runs BEFORE any GPU/download work, so a bad
+# credential fails fast and cheap.
+#
+# Env knobs (set by the Vertex job):
+#   PROJECT    spa-dev-499900
+#   BUCKET     gs://genomancer-spa-cache      cache dest = $BUCKET/$GCS_PREFIX
+#   GCS_PREFIX esm3_cache
+#   LIMIT      ""=all, or e.g. 1000 for the benchmark
+#   DATA_DIR   /workspace/data    (CDDB tarball download + untar)
+#   CACHE_DIR  /workspace/cache   (local .pt output before rsync)
+#   SPA_REPO   /opt/spa           (the repo cloned by the job bootstrap)
+set -euo pipefail
+
+PROJECT="${PROJECT:-spa-dev-499900}"
+BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
+GCS_PREFIX="${GCS_PREFIX:-esm3_cache}"
+LIMIT="${LIMIT:-}"
+DATA_DIR="${DATA_DIR:-/workspace/data}"
+CACHE_DIR="${CACHE_DIR:-/workspace/cache}"
+SPA_REPO="${SPA_REPO:-/opt/spa}"
+NGC_RESOURCE="nvidia/clara/proteina-atomistica_data:release"
+
+log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
+trap 'log "FAILED at line $LINENO"' ERR
+
+# --- 1) Secrets (job runs as spa-worker; ADC via the metadata server) -----------------------------
+log "fetching secrets from Secret Manager"
+export HF_TOKEN="$(gcloud secrets versions access latest --secret=spa-hf-token --project="$PROJECT")"
+export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+export NGC_CLI_API_KEY="$(gcloud secrets versions access latest --secret=spa-ngc-key --project="$PROJECT")"
+export NGC_CLI_ORG=nvidia
+export NGC_CLI_FORMAT_TYPE=ascii
+
+# --- 2) GATE A — credentials must work before we spend on GPU/download ----------------------------
+log "GATE A: ESM3 gated-weight canary (biohub/esm3-sm-open-v1/config.json)"
+python -c "from huggingface_hub import hf_hub_download; print('  ESM3 OK ->', hf_hub_download('biohub/esm3-sm-open-v1','config.json'))"
+log "GATE A: NGC resource reachable ($NGC_RESOURCE)"
+ngc registry resource info "$NGC_RESOURCE" --files >/dev/null && log "  NGC OK"
+
+# --- 3) GPU sanity --------------------------------------------------------------------------------
+python -c "import torch; assert torch.cuda.is_available(),'no CUDA'; print('GPU:', torch.cuda.get_device_name(0), 'CUDA', torch.version.cuda)"
+
+# --- 4) Fetch + untar CDDB from NGC ---------------------------------------------------------------
+mkdir -p "$DATA_DIR" "$CACHE_DIR"
+log "downloading CDDB from NGC -> $DATA_DIR"
+t_dl=$SECONDS
+ngc registry resource download-version "$NGC_RESOURCE" --dest "$DATA_DIR"
+TARBALL="$(find "$DATA_DIR" -name 'atomistica_cd_dataset.tar.gz' | head -1)"
+log "untarring $TARBALL"
+tar -xzf "$TARBALL" -C "$DATA_DIR"
+PDB_DIR="$(find "$DATA_DIR" -type d -name pdb | head -1)"
+log "download+untar ${SECONDS}-${t_dl}=$((SECONDS-t_dl))s; PDB dir: $PDB_DIR ($(ls "$PDB_DIR" | wc -l) files)"
+
+# --- 5) Install SPA (env-only image; heavy stack already present) and run cache-gen ----------------
+log "pip install -e SPA (--no-deps)"
+pip install -e "$SPA_REPO" --no-deps -q
+LIMIT_ARG=""; [ -n "$LIMIT" ] && LIMIT_ARG="limit=$LIMIT"
+log "ESM3 cache-gen (limit=${LIMIT:-all}) -> $CACHE_DIR"
+t_gen=$SECONDS
+python "$SPA_REPO/scripts/gen_esm3_cache.py" \
+    data=cddb hardware=cloud_h100 \
+    data.pdb_dir="$PDB_DIR" out_dir="$CACHE_DIR" $LIMIT_ARG
+gen_secs=$((SECONDS-t_gen))
+n_pt=$(find "$CACHE_DIR" -name '*.pt' | wc -l)
+cache_mb=$(du -sm "$CACHE_DIR" | cut -f1)
+
+# --- 6) Upload to GCS -----------------------------------------------------------------------------
+log "rsync cache -> $BUCKET/$GCS_PREFIX"
+gcloud storage rsync -r "$CACHE_DIR" "$BUCKET/$GCS_PREFIX"
+
+# --- 7) Benchmark summary (feeds the Gate-B extrapolation) ----------------------------------------
+log "===== SUMMARY ====="
+log "  structures cached : $n_pt"
+log "  cache size        : ${cache_mb} MB"
+log "  cache-gen wall    : ${gen_secs}s"
+python -c "n=$n_pt; s=$gen_secs; print(f'  throughput        : {n/max(s,1):.1f} prot/s  ->  455473 would take ~{455473/max(n/max(s,1),1e-9)/3600:.2f} h')"
+python -c "n=$n_pt; mb=$cache_mb; print(f'  full-cache est    : ~{mb/max(n,1)*455473/1024:.0f} GB (scaling MB/struct x 455473)')"
+log "DONE"

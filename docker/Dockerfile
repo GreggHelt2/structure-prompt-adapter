@@ -51,5 +51,19 @@ RUN --mount=type=ssh pip install -c /tmp/constraints.txt \
 # Cloud tooling: experiment tracking (W5.4 = W&B) + GCS I/O. The SPA repo itself is cloned at runtime.
 RUN pip install -c /tmp/constraints.txt wandb google-cloud-storage gcsfs
 
+# Cloud orchestration CLIs (trailing layer, so the torch/deps layers above stay cached):
+#   gcloud -> GCS rsync + Secret Manager access (via the job's spa-worker SA / ADC)
+#   ngc    -> pull the CDDB dataset (nvidia/clara/proteina-atomistica_data)
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz -o /tmp/gcloud.tgz \
+    && tar -xzf /tmp/gcloud.tgz -C /opt && rm /tmp/gcloud.tgz \
+    && /opt/google-cloud-sdk/install.sh --quiet --usage-reporting false --path-update false \
+    && ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud \
+    && ln -s /opt/google-cloud-sdk/bin/gsutil /usr/local/bin/gsutil \
+    && curl -fsSL https://ngc.nvidia.com/downloads/ngccli_linux.zip -o /tmp/ngccli.zip \
+    && unzip -q /tmp/ngccli.zip -d /opt && rm /tmp/ngccli.zip \
+    && ln -s /opt/ngc-cli/ngc /usr/local/bin/ngc \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 CMD ["/bin/bash"]
