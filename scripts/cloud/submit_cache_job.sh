@@ -10,8 +10,8 @@
 #
 # Usage:
 #   DRY_RUN=1 ./submit_cache_job.sh        # print the CustomJobSpec + gcloud cmd; create NOTHING
-#   ./submit_cache_job.sh                   # BENCHMARK: LIMIT=1000, 200GB, Spot  (FIRST H100 SPEND)
-#   LIMIT= DISK_GB=400 STRATEGY=FLEX_START ./submit_cache_job.sh   # FULL run (LIMIT empty = all)
+#   LIMIT=1000 CHECKPOINT_SEC=30 DISK_GB=650 REGION=us-west1 ./submit_cache_job.sh   # PROBE (~$3, ~13min)
+#   LIMIT= DISK_GB=650 REGION=us-west1 ./submit_cache_job.sh                          # FULL run (on-demand, all 455k)
 #
 # Safety: a malformed spec is rejected by the Vertex API *before* any machine is provisioned (free),
 # so the residual uncertainty in the scheduling/disk field names is safe to discover by submitting.
@@ -24,7 +24,7 @@ SA="${SA:-spa-worker@spa-dev-499900.iam.gserviceaccount.com}"
 REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
 LIMIT="${LIMIT-1000}"               # default benchmark; LIMIT= (empty) -> full run
-DISK_GB="${DISK_GB:-200}"           # benchmark uses ~65GB; full run ~302GB (bump, or local SSD per W5.3)
+DISK_GB="${DISK_GB:-200}"           # probe ~65GB; full run (cap=512) peaks ~550GB -> use DISK_GB=650 (or local SSD/W5.3)
 STRATEGY="${STRATEGY:-ONDEMAND}"    # ONDEMAND -> "Custom model training Nvidia H100 GPUs" quota (approved 1+1).
                                     # SPOT | FLEX_START use the *preemptible* H100 quota (separate bucket, =0 here).
 NAME="${NAME:-spa-cachegen-$(date -u +%Y%m%d-%H%M%S)}"
@@ -50,6 +50,10 @@ workerPoolSpecs:
       env:
         - name: LIMIT
           value: "${LIMIT}"
+        - name: LENGTH_CAP
+          value: "${LENGTH_CAP:-512}"
+        - name: CHECKPOINT_SEC
+          value: "${CHECKPOINT_SEC:-3600}"
 YAML
 
 # On-demand (default) uses the non-preemptible "Custom model training Nvidia H100 GPUs" quota and OMITS
@@ -61,7 +65,7 @@ case "${STRATEGY}" in
 esac
 
 echo ">>> CustomJobSpec (${CFG}):"; sed 's/^/    /' "${CFG}"
-echo ">>> name=${NAME}  region=${REGION}  sa=${SA}  limit=${LIMIT:-<all>}  strategy=${STRATEGY}  disk=${DISK_GB}GB"
+echo ">>> name=${NAME}  region=${REGION}  sa=${SA}  limit=${LIMIT:-<all>}  cap=${LENGTH_CAP:-512}  ckpt=${CHECKPOINT_SEC:-3600}s  strategy=${STRATEGY}  disk=${DISK_GB}GB"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
   echo ">>> DRY_RUN=1 — not submitting. Real command would be:"
