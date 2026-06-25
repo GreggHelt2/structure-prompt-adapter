@@ -39,6 +39,16 @@ log "SCRATCH=$SCRATCH ($(df -h "$SCRATCH" 2>/dev/null | awk 'NR==2{print $4" fre
 DATA_DIR="${DATA_DIR:-$SCRATCH/data}"
 CACHE_DIR="${CACHE_DIR:-$SCRATCH/cache}"
 
+# Fail FAST if SCRATCH can't hold the cache + its tar (peak ~2x cache) -> never die AFTER hours of compute.
+N_EST="${LIMIT:-455473}"
+NEED_GB="${MIN_FREE_GB:-$(( N_EST * 11 / 10000 + 40 ))}"   # ~0.55 MB/struct cache, x2 for the tar, +40 slack
+FREE_GB=$(df -BG "$SCRATCH" 2>/dev/null | awk 'NR==2{gsub(/[A-Za-z]/,"",$4); print $4}')
+log "free-space check: $SCRATCH has ${FREE_GB:-?} GB free, need >= ${NEED_GB} GB"
+if [ -n "${FREE_GB:-}" ] && [ "$FREE_GB" -lt "$NEED_GB" ]; then
+  log "FATAL: scratch too small (${FREE_GB} < ${NEED_GB} GB) for cache + tar -- bump DISK_GB or use the local NVMe. Aborting before any spend."
+  exit 1
+fi
+
 # --- 1) Secrets (job runs as spa-worker; ADC via the metadata server) -----------------------------
 log "fetching secrets from Secret Manager"
 export HF_TOKEN="$(gcloud secrets versions access latest --secret=spa-hf-token --project="$PROJECT")"
@@ -98,11 +108,18 @@ cache_mb=$(du -sm "$CACHE_DIR" | cut -f1)
 # the tar persists for re-upload). Costs ~1x extra disk transiently -> size the boot disk ~500GB (cheap, ~$1).
 TAR_URI="${TAR_URI:-$BUCKET/${GCS_PREFIX}.tar}"
 TAR_LOCAL="${TAR_LOCAL:-$(dirname "$CACHE_DIR")/esm3_cache.tar}"
+# Free the CDDB PDBs (~62 GB) before taring -> lowers peak disk to ~2x cache (the precheck assumes this).
+log "freeing CDDB data ($DATA_DIR) before tar"
+rm -rf "${DATA_DIR:?}"/* 2>/dev/null || true
 log "tar $n_pt .pt files -> $TAR_LOCAL"
 tar -cf "$TAR_LOCAL" -C "$CACHE_DIR" .
-log "upload $TAR_LOCAL ($(du -h "$TAR_LOCAL" 2>/dev/null | cut -f1)) -> $TAR_URI (resumable, parallel)"
-gcloud storage cp "$TAR_LOCAL" "$TAR_URI"
-log "uploaded single tar: $TAR_URI"
+# Upload with retries: a single transient blip here, after hours of compute, must not lose the run.
+for attempt in 1 2 3 4 5; do
+  log "upload $TAR_LOCAL ($(du -h "$TAR_LOCAL" 2>/dev/null | cut -f1)) -> $TAR_URI (attempt $attempt/5)"
+  if gcloud storage cp "$TAR_LOCAL" "$TAR_URI"; then log "uploaded single tar: $TAR_URI"; break; fi
+  [ "$attempt" = 5 ] && { log "FATAL: upload failed after 5 attempts (tar kept at $TAR_LOCAL)"; exit 1; }
+  log "upload failed; retry in 30s"; sleep 30
+done
 
 # --- 7) Benchmark summary (feeds the Gate-B extrapolation) ----------------------------------------
 log "===== SUMMARY ====="

@@ -23,7 +23,7 @@ def main(cfg: DictConfig) -> None:
     print(
         f"ESM3 cache -> {stats['out_dir']}: {stats['n_done']} written "
         f"({mb:.1f} MB), {stats['n_skipped']} skipped, {stats['n_too_long']} over length cap, "
-        f"in {stats['seconds']}s."
+        f"{stats['n_failed']} failed, in {stats['seconds']}s."
     )
 
 

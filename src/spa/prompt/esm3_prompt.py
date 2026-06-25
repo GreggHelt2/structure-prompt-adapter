@@ -107,7 +107,7 @@ def build_cache(cfg, esm3_model=None) -> dict:
     pdbs = sorted(Path(pdb_root).glob("*.pdb"))
     if limit is not None:
         pdbs = pdbs[: int(limit)]
-    stats = {"n_done": 0, "n_skipped": 0, "n_too_long": 0, "bytes": 0, "out_dir": str(out_dir)}
+    stats = {"n_done": 0, "n_skipped": 0, "n_too_long": 0, "n_failed": 0, "bytes": 0, "out_dir": str(out_dir)}
     total = len(pdbs)
     prog_sec = float(cfg.get("progress_every_sec", 60))  # live [progress] cadence; stdout -> Cloud Logging
     t0 = time.time()
@@ -118,14 +118,23 @@ def build_cache(cfg, esm3_model=None) -> dict:
         if dst.exists():
             stats["n_skipped"] += 1
         else:
-            emb = esm3_prompt(pdb, model, strip_bos_eos=cfg.strip_bos_eos)
-            if length_cap is not None and emb.shape[0] > length_cap:
-                stats["n_too_long"] += 1
-            else:
-                emb = emb.to("cpu", save_dtype).contiguous()
-                torch.save(emb, dst)
-                stats["n_done"] += 1
-                stats["bytes"] += dst.stat().st_size
+            try:
+                emb = esm3_prompt(pdb, model, strip_bos_eos=cfg.strip_bos_eos)
+                if length_cap is not None and emb.shape[0] > length_cap:
+                    stats["n_too_long"] += 1
+                else:
+                    emb = emb.to("cpu", save_dtype).contiguous()
+                    tmp = dst.with_suffix(".pt.tmp")
+                    torch.save(emb, tmp)
+                    tmp.replace(dst)  # atomic: dst.exists() <=> complete (safe skip + resume; no partial files)
+                    stats["n_done"] += 1
+                    stats["bytes"] += dst.stat().st_size
+            except Exception as e:  # one bad/OOM structure must NOT kill a multi-hour run
+                stats["n_failed"] += 1
+                if stats["n_failed"] <= 20:
+                    print(f"[warn] failed {pdb.name}: {type(e).__name__}: {e}", flush=True)
+                if "out of memory" in str(e).lower() and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         now = time.time()
         if now - last_log >= prog_sec or i + 1 == total:
             done, el = i + 1, now - t0
@@ -133,9 +142,9 @@ def build_cache(cfg, esm3_model=None) -> dict:
             eta_h = (total - done) / rate / 3600 if rate > 0 else 0.0
             print(
                 f"[progress] {done}/{total} ({100.0 * done / total:.1f}%) | "
-                f"cached={stats['n_done']} toolong={stats['n_too_long']} skip={stats['n_skipped']} | "
-                f"{rate:.1f} prot/s | elapsed {el / 60:.1f} min | ETA {eta_h:.2f} h | "
-                f"cache {stats['bytes'] / 1e9:.2f} GB",
+                f"cached={stats['n_done']} toolong={stats['n_too_long']} skip={stats['n_skipped']} "
+                f"fail={stats['n_failed']} | {rate:.1f} prot/s | elapsed {el / 60:.1f} min | "
+                f"ETA {eta_h:.2f} h | cache {stats['bytes'] / 1e9:.2f} GB",
                 flush=True,
             )
             last_log = now
