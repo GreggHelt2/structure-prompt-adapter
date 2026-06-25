@@ -40,8 +40,19 @@ python -c "from huggingface_hub import hf_hub_download; print('  ESM3 OK ->', hf
 log "GATE A: NGC resource reachable ($NGC_RESOURCE)"
 ngc registry resource info "$NGC_RESOURCE" --files >/dev/null && log "  NGC OK"
 
-# --- 3) GPU sanity --------------------------------------------------------------------------------
-python -c "import torch; assert torch.cuda.is_available(),'no CUDA'; print('GPU:', torch.cuda.get_device_name(0), 'CUDA', torch.version.cuda)"
+# --- 3) GPU sanity (+ driver path fix + diagnostics) ----------------------------------------------
+# Vertex's nvidia-container runtime MOUNTS the host driver (libcuda.so.1) into /usr/local/nvidia, but the
+# python:3.12-slim base doesn't put that on the library path -> torch can't find libcuda -> "no CUDA"
+# (this failed the 0.2.0/0.3.0 runs even with NVIDIA_DRIVER_CAPABILITIES=compute). Add the path:
+export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
+export PATH="/usr/local/nvidia/bin:${PATH}"
+ldconfig 2>/dev/null || true
+log "GPU diag: NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-<unset>} CAPS=${NVIDIA_DRIVER_CAPABILITIES:-<unset>}"
+( ls /usr/local/nvidia/lib64 2>/dev/null | grep -iE "libcuda|libnvidia-ml" | head ) || echo "  (no driver libs in /usr/local/nvidia/lib64)"
+( ls -l /dev/nvidia* 2>&1 | head -6 ) || true
+( command -v nvidia-smi >/dev/null && nvidia-smi -L ) || echo "  nvidia-smi: not available"
+python -c "import torch; print('  torch',torch.__version__,'built-cuda',torch.version.cuda,'avail',torch.cuda.is_available(),'count',torch.cuda.device_count())" || true
+python -c "import torch; assert torch.cuda.is_available(), 'no CUDA'; print('GPU:', torch.cuda.get_device_name(0), 'CUDA', torch.version.cuda)"
 
 # --- 4) Fetch + untar CDDB from NGC ---------------------------------------------------------------
 mkdir -p "$DATA_DIR" "$CACHE_DIR"
