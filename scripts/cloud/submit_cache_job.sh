@@ -48,13 +48,17 @@ workerPoolSpecs:
       command: ["bash", "-c"]
       args: ["${BOOT}"]
       env:
-        - name: LIMIT
-          value: "${LIMIT}"
         - name: LENGTH_CAP
           value: "${LENGTH_CAP:-512}"
         - name: CHECKPOINT_SEC
           value: "${CHECKPOINT_SEC:-3600}"
 YAML
+
+# LIMIT only when non-empty: Vertex rejects an empty env value, and an ABSENT LIMIT makes
+# run_cache_gen.sh ("${LIMIT:-}") process the FULL dataset. The probe/benchmark set LIMIT=1000.
+if [ -n "${LIMIT}" ]; then
+  printf '        - name: LIMIT\n          value: "%s"\n' "${LIMIT}" >> "${CFG}"
+fi
 
 # On-demand (default) uses the non-preemptible "Custom model training Nvidia H100 GPUs" quota and OMITS
 # the scheduling block (Vertex defaults to on-demand). SPOT/FLEX_START use the separate *preemptible*
