@@ -106,9 +106,16 @@ fi
 # Decoupled from the producer; failures here never touch the main loop. CHECKPOINT_SEC=0 disables it.
 CKPT_PID=""
 if [ "${CHECKPOINT_SEC:-0}" -gt 0 ]; then
-  ( while sleep "$CHECKPOINT_SEC"; do
-      gcloud storage rsync -r "$CACHE_DIR" "$CKPT_PREFIX" >/dev/null 2>&1 \
-        && log "checkpoint: $(find "$CACHE_DIR" -name '*.pt' | wc -l) .pt -> $CKPT_PREFIX" || true
+  ( ckpt_n=0; prev_pt=0
+    while sleep "$CHECKPOINT_SEC"; do
+      ckpt_n=$((ckpt_n+1)); t_ck=$SECONDS
+      now_pt=$(find "$CACHE_DIR" -name '*.pt' 2>/dev/null | wc -l)
+      if gcloud storage rsync -r "$CACHE_DIR" "$CKPT_PREFIX" >/dev/null 2>&1; then
+        log "checkpoint #$ckpt_n OK: $now_pt .pt cached (+$((now_pt-prev_pt)) since last), rsync $((SECONDS-t_ck))s -> $CKPT_PREFIX"
+        prev_pt=$now_pt
+      else
+        log "checkpoint #$ckpt_n FAILED (rsync error; will retry next tick) -- $now_pt .pt local"
+      fi
     done ) &
   CKPT_PID=$!
   trap '[ -n "${CKPT_PID:-}" ] && kill "$CKPT_PID" 2>/dev/null || true' EXIT
@@ -125,7 +132,7 @@ gen_secs=$((SECONDS-t_gen))
 # Producer done: stop the bg checkpoint + one final catch-up rsync (covers files since the last tick).
 if [ -n "$CKPT_PID" ]; then
   kill "$CKPT_PID" 2>/dev/null || true; wait "$CKPT_PID" 2>/dev/null || true
-  log "final checkpoint rsync -> $CKPT_PREFIX"
+  log "final checkpoint rsync ($(find "$CACHE_DIR" -name '*.pt' | wc -l) .pt) -> $CKPT_PREFIX"
   gcloud storage rsync -r "$CACHE_DIR" "$CKPT_PREFIX" || true
 fi
 n_pt=$(find "$CACHE_DIR" -name '*.pt' | wc -l)
