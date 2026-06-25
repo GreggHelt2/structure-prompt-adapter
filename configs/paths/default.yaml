@@ -3,6 +3,9 @@
 project_root: ${oc.env:SPA_PROJECT_ROOT,/home/user1/projects/spa}
 models_root: ${paths.project_root}/models
 data_root: ${paths.project_root}/training_data
+# Foundry's RFD3 training-transform yamls (read by spa.data.dataset to rebuild the CDDB featurization,
+# dev 09 §6/§8). A dependency-repo path -> config, overridable on cloud where foundry is installed.
+foundry_train_cfg_dir: ${paths.project_root}/needed_repos/foundry/models/rfd3/configs/datasets/train
 
 # Frozen-host weights (dev root CLAUDE.md → Model Weights). RFD3 ckpt_path accepts an arbitrary path.
 rfd3_ckpt: ${paths.models_root}/rfdiffusion3/rfd3_latest.ckpt

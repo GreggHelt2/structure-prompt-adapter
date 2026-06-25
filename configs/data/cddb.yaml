@@ -29,3 +29,7 @@ split:
 # Runtime dataloader view (VRAM lever; NOT baked into the splits). Overridden per hardware
 # (A5000 small, H100 larger). Structures longer than this are skipped at load time.
 length_cap: 256
+
+# Local testing only: restrict the dataset to structures that already have a cached ESM3 prompt, so
+# the small local cache (a few structures) suffices. No-op on the full cloud cache. Default off.
+require_cached_prompt: false

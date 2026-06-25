@@ -6,7 +6,8 @@ optimizer: adamw
 warmup_steps: 500
 grad_clip: 1.0
 cfg_drop_rate: 0.1     # zero-prompt dropout probability (dev 03 §8 / Q1.1: ~5–10%)
-se3_augment: true      # random-rotation augmentation on the TARGET coords (dev 03 §7)
+se3_augment: true      # toy path only: random-rotation aug on TARGET coords (dev 03 §7).
+                       # data=cddb -> harness forces this OFF (the RFD3 pipeline augments natively).
 masked_prompt_curriculum: false  # MVP skips it (dev 07 Q5.5)
 tracker: null          # null | wandb | tensorboard  (dev 07 W5.4 — undecided; install `[tracking]` if wandb)
 ckpt_every_steps: 1000
@@ -14,6 +15,8 @@ ckpt_dir: ${paths.ckpt_dir}
 seed: 0
 max_steps: 200         # local sanity-overfit step budget (real training uses epochs over the dataset)
 n_cycle: 1             # RFD3 recycles per training forward
+num_workers: 2         # data=cddb dataloader workers for live featurization (dev 09 §8: >=2 hides it
+                       # behind the GPU step — live featurization, no second cache)
 capture_length: 24     # toy-overfit only: residue length for the synthetic-example capture run
 synthetic_target_offset: 3.0  # toy-overfit only: artificial target = vanilla output + this·N(0,1) Å
 

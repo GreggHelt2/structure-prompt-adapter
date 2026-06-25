@@ -111,31 +111,68 @@ def load_spa(adapter, path) -> None:
     adapter.load_state_dict(torch.load(path, weights_only=True))
 
 
+def _single(batch):
+    """DataLoader collate for batch_size=1: pass the one example dict through unstacked (each example
+    is already a ``D``-wide diffusion batch; structures have different ``L`` so they can't be stacked)."""
+    return batch[0]
+
+
+def _example_stream(cfg, engine, net, device):
+    """Infinite iterator of on-device example dicts. ``toy`` -> one synthetic example; else the real
+    ``CDDBPromptDataset`` via a DataLoader (live featurization in workers, moved to device here)."""
+    if cfg.data.name == "toy":
+        from ..data.synthetic import capture_synthetic_example
+
+        example = capture_synthetic_example(engine, net, cfg, device)
+        while True:
+            yield example
+    else:
+        from torch.utils.data import DataLoader
+
+        from ..data.dataset import CDDBPromptDataset, move_to_device
+
+        ds = CDDBPromptDataset(cfg, split="train")
+        if len(ds) == 0:
+            raise RuntimeError(
+                "CDDBPromptDataset(train) is empty — check the split manifest + ESM3 cache "
+                f"(require_cached_prompt={cfg.data.get('require_cached_prompt', False)})."
+            )
+        nw = int(cfg.train.get("num_workers", 2))
+        loader = DataLoader(ds, batch_size=1, shuffle=True, collate_fn=_single,
+                            num_workers=nw, persistent_workers=nw > 0)
+        while True:
+            for ex in loader:
+                yield move_to_device(ex, device)
+
+
 def train(cfg) -> None:
-    """Run SPA training from a composed Hydra config (local toy-overfit; real data is step 8)."""
+    """Run SPA training from a composed Hydra config. ``data=toy`` overfits a synthetic example;
+    ``data=cddb`` streams real featurized CDDB examples (kickoff step 8 Part B)."""
     device = resolve_device(cfg.hardware.device)
     engine = build_engine(cfg)
     net = frozen_rfd3_net(engine)
 
-    if cfg.data.name == "toy":
-        from ..data.synthetic import capture_synthetic_example
-        examples = [capture_synthetic_example(engine, net, cfg, device)]
-    else:
-        raise NotImplementedError(
-            "real CDDB dataset/featurization is kickoff step 8; use data=toy for the local overfit."
-        )
+    # The real CDDB pipeline applies RFD3-native SE(3) augmentation; the harness must NOT also augment
+    # (double aug). The toy/synthetic path has no native aug, so it keeps cfg's setting.
+    if cfg.data.name != "toy" and cfg.train.se3_augment:
+        from omegaconf import OmegaConf
+
+        OmegaConf.set_struct(cfg, False)
+        cfg.train.se3_augment = False
+        print("note: data != toy -> forcing train.se3_augment=False (the pipeline augments natively)")
 
     adapter = attach_spa(net, cfg).to(device)
     set_host_train_mode(net)
     loss_fn = build_loss(cfg).to(device)
-    opt = torch.optim.AdamW(adapter.parameters(), lr=cfg.train.lr,
-                            weight_decay=cfg.train.weight_decay)
+    opt = torch.optim.AdamW(adapter.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
     gen = torch.Generator().manual_seed(cfg.train.seed)
+    stream = _example_stream(cfg, engine, net, device)
 
     for step in range(cfg.train.max_steps):
+        example = next(stream)
         opt.zero_grad()
         with torch.autocast(device.type, dtype=torch.bfloat16):
-            loss, _ = spa_training_step(net, adapter, loss_fn, examples[step % len(examples)], cfg, gen)
+            loss, _ = spa_training_step(net, adapter, loss_fn, example, cfg, gen)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(adapter.parameters(), cfg.train.grad_clip)
         opt.step()
