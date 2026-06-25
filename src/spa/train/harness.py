@@ -88,8 +88,8 @@ def spa_training_step(net, adapter, loss_fn, example, cfg, generator=None):
     drop = torch.rand(1, generator=generator).item() < cfg.train.cfg_drop_rate
     if drop or example.get("prompt") is None:      # CFG zero-prompt dropout
         adapter.clear_prompt()
-    else:
-        adapter.set_prompt(example["prompt"])      # recompute K/V each step (grad -> prompt_kv)
+    else:                                          # recompute K/V each step (grad -> prompt_kv);
+        adapter.set_prompt(example["prompt"], key_padding_mask=example.get("prompt_mask"))  # non-overlap mask
 
     out = net.forward(input={"X_noisy_L": x_noisy, "t": t, "f": f},
                       n_cycle=cfg.train.n_cycle)["X_L"].float()

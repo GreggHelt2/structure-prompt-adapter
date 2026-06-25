@@ -33,3 +33,8 @@ length_cap: 256
 # Local testing only: restrict the dataset to structures that already have a cached ESM3 prompt, so
 # the small local cache (a few structures) suffices. No-op on the full cloud cache. Default off.
 require_cached_prompt: false
+
+# Native RFD3 conditioning curriculum (dev 10 §7): `unconditional` (Run A — SPA-only) or `island`
+# (Run B — motif scaffolding + SPA on the non-motif scaffold, via prompt-row masking). `island`
+# re-enables indexed fixed-coord motifs; the SPA prompt then masks those motif rows (non-overlap).
+conditioning: unconditional

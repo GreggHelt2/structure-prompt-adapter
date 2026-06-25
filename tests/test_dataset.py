@@ -112,3 +112,53 @@ def test_loss_falls(gate):
 def test_gradient_flows_to_spa_only(gate):
     assert gate.host_grad_none      # frozen RFD3 never accumulates gradient
     assert gate.spa_grad > 0        # SPA params do
+
+
+def test_run_b_motif_mask_and_loss():
+    """Run B (mixed): `conditioning=island` yields a native fixed-coord motif; the SPA prompt masks the
+    motif rows (non-overlap, dev 10 §7.2) leaving a scaffold; the masked example drives the loss with
+    gradient to SPA only. island is stochastic (~50% motif) so we sample a few draws to find one."""
+    from spa.data.dataset import CDDBPromptDataset, move_to_device
+    from spa.train.harness import (
+        build_engine, build_loss, frozen_rfd3_net, set_host_train_mode, spa_training_step,
+    )
+
+    cfg = _cfg()
+    cfg.data.conditioning = "island"   # Run B
+    device = torch.device(cfg.hardware.device)
+    ds = CDDBPromptDataset(cfg, split="train")
+    if len(ds) == 0:
+        pytest.skip("no train-split structure has a cached ESM3 prompt")
+
+    motif_ex = next((ex for _ in range(16) if (ex := ds[0])["prompt_mask"] is not None), None)
+    assert motif_ex is not None, "island produced no motif in 16 draws"
+    pm = motif_ex["prompt_mask"]
+    N = pm.shape[1]
+    I = int(motif_ex["feats"]["ref_motif_token_type"].shape[0])
+    masked = int(pm[0].sum())
+    assert N == I                                  # indexed motif -> prompt aligns to the token track
+    assert 0 < masked < N                          # masks the motif, leaves a scaffold (not all/none)
+    assert pm.dtype == torch.bool and tuple(pm.shape) == (motif_ex["t"].shape[0], N)
+
+    engine = build_engine(cfg)
+    net = frozen_rfd3_net(engine)
+    adapter = attach_spa(net, cfg).to(device)
+    set_host_train_mode(net)
+    loss_fn = build_loss(cfg).to(device)
+    ex = move_to_device(motif_ex, device)
+
+    host_p = net.diffusion_module.diffusion_transformer.blocks[0].attention_pair_bias.orig.to_q.weight
+    opt = torch.optim.AdamW(adapter.parameters(), lr=1e-4)
+    g = torch.Generator().manual_seed(0)
+    losses, host_none = [], []
+    for _ in range(12):
+        opt.zero_grad()
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            loss, _ = spa_training_step(net, adapter, loss_fn, ex, cfg, g)
+        loss.backward()
+        host_none.append(host_p.grad is None)
+        opt.step()
+        losses.append(loss.item())
+    spa_grad = sum((p.grad.abs().sum().item() if p.grad is not None else 0.0) for p in adapter.parameters())
+    assert all(map(math.isfinite, losses)) and min(losses[3:]) < losses[0]
+    assert all(host_none) and spa_grad > 0

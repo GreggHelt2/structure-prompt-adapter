@@ -33,7 +33,9 @@ def _cfg(tmp_dir, max_steps=60):
                       "zero_init_output": True, "lambda_init": 1.0, "input_rmsnorm": True},
             "variant": {"name": "C", "projector": "identity", "resampler_tokens": None,
                         "strip_bos_eos": True, "use_clss": False},
-            "train": {"lr": 2.0e-3, "weight_decay": 0.0, "grad_clip": 1.0, "cfg_drop_rate": 0.0,
+            # lr kept modest: the bf16 forward is ~2e-4 non-deterministic, so an aggressive lr makes the
+            # single-example overfit occasionally diverge (flaky). 1e-3 converges in 60 steps and is stable.
+            "train": {"lr": 1.0e-3, "weight_decay": 0.0, "grad_clip": 1.0, "cfg_drop_rate": 0.0,
                       "se3_augment": False, "n_cycle": 1, "max_steps": max_steps, "seed": 0,
                       "capture_length": 24, "synthetic_target_offset": 3.0, "ckpt_dir": str(tmp_dir),
                       "loss": {"sigma_data": 16, "weight": 4.0, "lddt_weight": 0.25,

@@ -57,8 +57,33 @@ def _remap_targets(d):
     return d
 
 
-@functools.lru_cache(maxsize=2)
-def build_train_transform(rfd3_ckpt: str, foundry_train_cfg_dir: str, sigma_data: int = 16):
+def _select_conditions(all_conditions: dict, conditioning: str) -> dict:
+    """Select + reweight RFD3's native ``train_conditions`` for the SPA curriculum (dev ``10`` §7.3).
+
+    - ``"unconditional"``: no native conditioning (**Run A**) — full-structure denoise.
+    - ``"island"`` / ``"mixed"``: ~50/50 unconditional + **indexed fixed-coord motif scaffolding**
+      (**Run B**). The island is forced INDEXED (``p_unindex=0`` ⇒ token count == residue count, so the
+      cached per-residue prompt stays aligned) and fixed-coordinate (``p_fix_coordinates=1`` ⇒ a true hard
+      constraint); sequence stays diffused. SPA then conditions the **non-motif scaffold** (prompt motif
+      rows masked, dev ``10`` §7.2).
+    """
+    if conditioning == "unconditional":
+        return {"unconditional": all_conditions["unconditional"]}
+    if conditioning in ("island", "mixed"):
+        uncond = dict(all_conditions["unconditional"])
+        uncond["frequency"] = 1.0
+        island = dict(all_conditions["island"])
+        island["frequency"] = 1.0
+        island["p_unindex_motif_tokens"] = 0.0   # indexed -> token count == residue count (prompt aligns)
+        island["p_fix_motif_coordinates"] = 1.0  # always a hard fixed-coord motif
+        island["p_fix_motif_sequence"] = 0.0     # fix geometry only; sequence stays diffused
+        return {"unconditional": uncond, "island": island}
+    raise ValueError(f"unknown conditioning={conditioning!r} (use 'unconditional' or 'island'/'mixed')")
+
+
+@functools.lru_cache(maxsize=4)
+def build_train_transform(rfd3_ckpt: str, foundry_train_cfg_dir: str, sigma_data: int = 16,
+                          conditioning: str = "unconditional"):
     """Reconstruct RFD3's CDDB-monomer **training** featurization pipeline (dev ``09`` §6/§8).
 
     Returns a Compose transform: parsed-structure dict -> example dict (``feats``, ``t``, ``noise``,
@@ -86,9 +111,9 @@ def build_train_transform(rfd3_ckpt: str, foundry_train_cfg_dir: str, sigma_data
     node.return_atom_array = False  # training consumes tensors, not the atom array
     root = OmegaConf.create({"datasets": tc.datasets, "model": tc.model, "tf": node})
     cont = _remap_targets(OmegaConf.to_container(root, resolve=True)["tf"])
-    # SPA MVP denoises the FULL structure -> unconditional path only; drop motif conditions
-    # (island / tipatom / ppi / seq) and the external-binary hbond feature (hbplus).
-    cont["train_conditions"] = {"unconditional": cont["train_conditions"]["unconditional"]}
+    # Native conditioning is a curriculum knob (dev 10 §7): Run A = unconditional, Run B = + island
+    # motif scaffolding. Drop the external-binary hbond feature (hbplus) regardless.
+    cont["train_conditions"] = _select_conditions(cont["train_conditions"], conditioning)
     cont["meta_conditioning_probabilities"]["calculate_hbonds"] = 0.0
     return hydra.utils.instantiate(OmegaConf.create(cont))
 
@@ -149,7 +174,10 @@ class CDDBPromptDataset(Dataset):
 
     @property
     def transform(self):
-        return build_train_transform(self.cfg.paths.rfd3_ckpt, self.cfg.paths.foundry_train_cfg_dir)
+        return build_train_transform(
+            self.cfg.paths.rfd3_ckpt, self.cfg.paths.foundry_train_cfg_dir,
+            conditioning=self.cfg.data.get("conditioning", "unconditional"),
+        )
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -159,7 +187,9 @@ class CDDBPromptDataset(Dataset):
         out = self.transform(load_structure(row["id"], os.path.join(self.pdb_dir, row["pdb_file"])))
 
         coords = out["coord_atom_lvl_to_be_noised"]  # [D, L, 3] clean (augmented), tiled
+        D = coords.shape[0]
         gt = out["ground_truth"]
+        prompt = self._load_prompt(os.path.splitext(row["pdb_file"])[0], D)  # [D, N, 1536]
         return {
             "feats": out["feats"],
             "t": out["t"],  # [D]
@@ -167,10 +197,24 @@ class CDDBPromptDataset(Dataset):
             "X_gt_L_in_input_frame": coords,  # no-align target (trainer rfd3.py:292)
             "crd_mask_L": gt["mask_atom_lvl"].bool(),  # bool (lDDT does an in-place bool multiply)
             "is_original_unindexed_token": gt["is_original_unindexed_token"].bool(),
-            # prompt cache is keyed by the PDB-file stem (what spa.prompt.build_cache writes)
-            "prompt": self._load_prompt(os.path.splitext(row["pdb_file"])[0], coords.shape[0]),  # [D, N, 1536]
+            "prompt": prompt,  # [D, N, 1536]; cache keyed by PDB-file stem (spa.prompt.build_cache)
+            # non-overlap (dev 10 §7.2): mask the native-motif rows so SPA conditions the scaffold only
+            "prompt_mask": self._motif_prompt_mask(out["feats"], prompt.shape[1], D),
         }
 
     def _load_prompt(self, pdb_stem: str, D: int) -> torch.Tensor:
         p = torch.load(os.path.join(self.cache_dir, f"{pdb_stem}.pt"), weights_only=True).float()  # [N, 1536]
         return p.unsqueeze(0).expand(D, -1, -1).contiguous()
+
+    @staticmethod
+    def _motif_prompt_mask(feats, n_prompt: int, D: int):
+        """``[D, N]`` bool key-padding mask (True = masked) over the native-motif tokens, so SPA
+        conditions on the non-motif **scaffold** only (dev ``10`` §7.2). ``None`` when there is no motif
+        (unconditional), when it would mask everything, or when the token count != prompt N."""
+        mtt = feats.get("ref_motif_token_type")  # [I, 3] one-hot: non-motif / indexed-motif / unindexed-motif
+        if mtt is None:
+            return None
+        motif = mtt[:, 1:].sum(dim=-1) > 0  # [I] True at motif tokens
+        if motif.shape[0] != n_prompt or not bool(motif.any()) or bool(motif.all()):
+            return None  # non-overlap not applicable (no/all motif, or token-count != prompt N)
+        return motif[None].expand(D, -1).contiguous()
