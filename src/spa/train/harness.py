@@ -176,11 +176,18 @@ def train(cfg) -> None:
         opt.zero_grad()
         with torch.autocast(device.type, dtype=torch.bfloat16):
             loss, _ = spa_training_step(net, adapter, loss_fn, example, cfg, gen)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(adapter.parameters(), cfg.train.grad_clip)
-        opt.step()
+        # A CFG zero-prompt-dropout step (or any all-frozen forward) clears the prompt -> the wrapper
+        # returns base-only = vanilla frozen-RFD3 output, so the loss has NO path to a trainable param
+        # (loss.requires_grad is False). With a frozen host the unconditional output is exactly vanilla
+        # RFD3, so such a step has nothing to teach SPA: skip backward/step instead of crashing in
+        # backward ("element 0 ... does not require grad"). SPA's unconditional path is free at λ=0.
+        dropped = not loss.requires_grad
+        if not dropped:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(adapter.parameters(), cfg.train.grad_clip)
+            opt.step()
         if step % 10 == 0 or step == cfg.train.max_steps - 1:
-            print(f"step {step:4d} | loss {loss.item():.4f}")
+            print(f"step {step:4d} | loss {loss.item():.4f}{'  (cfg-drop: skipped)' if dropped else ''}")
 
     import os
     os.makedirs(cfg.train.ckpt_dir, exist_ok=True)
