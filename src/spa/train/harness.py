@@ -64,6 +64,30 @@ def build_loss(cfg):
     )
 
 
+def build_scheduler(opt, cfg):
+    """Linear warmup -> cosine decay over ``cfg.train.max_steps`` optimizer steps (dev ``04`` §5).
+
+    LR ramps linearly over ``warmup_steps`` then follows a cosine from the base LR down to
+    ``min_lr_ratio × base``. Stepped once per OPTIMIZER step (post grad-accum); its ``state_dict`` is
+    checkpointed so a resumed run continues the same schedule (workstream C).
+    """
+    import math
+
+    warmup = int(cfg.train.get("warmup_steps", 0))
+    total = int(cfg.train.max_steps)
+    min_ratio = float(cfg.train.get("min_lr_ratio", 0.0))
+
+    def lr_lambda(step):  # step = 0-based optimizer-step index
+        if warmup > 0 and step < warmup:
+            return (step + 1) / warmup
+        if total <= warmup:
+            return 1.0
+        progress = min(1.0, (step - warmup) / max(1, total - warmup))
+        return min_ratio + (1.0 - min_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+
+
 def set_host_train_mode(net) -> None:
     """Enable RFD3's training-forward branch (``net.training=True``) but keep host dropout in eval."""
     net.train()
@@ -171,26 +195,49 @@ def train(cfg) -> None:
     # (e.g. variant-A's CLSS structure_adapter), which must stay out of the optimizer.
     trainable = [p for p in adapter.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+    sched = build_scheduler(opt, cfg)
     gen = torch.Generator().manual_seed(cfg.train.seed)
     stream = _example_stream(cfg, engine, net, device)
 
+    # Effective batch = ``grad_accum`` micro-steps (each one structure == a D-wide diffusion batch)
+    # per OPTIMIZER step; ``max_steps`` counts optimizer steps and the run is driven by a step/time
+    # budget, not epochs (sub-epoch reality, dev ``04`` §11). The toy path overfits ONE repeated
+    # example, so accumulation there only rescales the effective LR -> force grad_accum=1 (keeps the
+    # sanity run fast + behaviour-equivalent), mirroring the se3_augment special-case above.
+    grad_accum = 1 if cfg.data.name == "toy" else int(cfg.hardware.get("grad_accum", 1))
+    max_hours = cfg.train.get("max_hours", None)
+
+    import time
+
+    t0 = time.monotonic()
     for step in range(cfg.train.max_steps):
-        example = next(stream)
         opt.zero_grad()
-        with torch.autocast(device.type, dtype=torch.bfloat16):
-            loss, _ = spa_training_step(net, adapter, loss_fn, example, cfg, gen)
-        # A CFG zero-prompt-dropout step (or any all-frozen forward) clears the prompt -> the wrapper
-        # returns base-only = vanilla frozen-RFD3 output, so the loss has NO path to a trainable param
-        # (loss.requires_grad is False). With a frozen host the unconditional output is exactly vanilla
-        # RFD3, so such a step has nothing to teach SPA: skip backward/step instead of crashing in
-        # backward ("element 0 ... does not require grad"). SPA's unconditional path is free at λ=0.
-        dropped = not loss.requires_grad
-        if not dropped:
-            loss.backward()
+        accum_loss, n_back = 0.0, 0
+        for _ in range(grad_accum):
+            example = next(stream)
+            with torch.autocast(device.type, dtype=torch.bfloat16):
+                loss, _ = spa_training_step(net, adapter, loss_fn, example, cfg, gen)
+            # With the learned null token a CFG-dropped step still has a gradient (dev ``11`` §6); the
+            # only no-grad case left is a genuinely prompt-free forward (e.g. toy with no prompt) ==
+            # vanilla frozen RFD3, which has nothing to teach SPA -> skip its backward (the B1 guard,
+            # else backward raises "element 0 ... does not require grad").
+            if not loss.requires_grad:
+                continue
+            (loss / grad_accum).backward()
+            accum_loss += loss.item()
+            n_back += 1
+        lr_now = sched.get_last_lr()[0]  # the LR actually applied at this step (before advancing)
+        if n_back > 0:
             torch.nn.utils.clip_grad_norm_(adapter.parameters(), cfg.train.grad_clip)
             opt.step()
+        sched.step()
         if step % 10 == 0 or step == cfg.train.max_steps - 1:
-            print(f"step {step:4d} | loss {loss.item():.4f}{'  (cfg-drop: skipped)' if dropped else ''}")
+            avg = accum_loss / n_back if n_back else float("nan")
+            print(f"step {step:5d} | loss {avg:.4f} | lr {lr_now:.2e}"
+                  f"{'  (no-grad: skipped)' if n_back == 0 else ''}")
+        if max_hours is not None and (time.monotonic() - t0) >= float(max_hours) * 3600:
+            print(f"time budget {max_hours}h reached at optimizer step {step}")
+            break
 
     import os
     os.makedirs(cfg.train.ckpt_dir, exist_ok=True)
