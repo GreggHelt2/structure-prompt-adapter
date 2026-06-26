@@ -88,6 +88,58 @@ def build_scheduler(opt, cfg):
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
+def _wo_norm(adapter) -> float:
+    """Mean Frobenius norm of the per-block zero-init output projections ``Wo`` — a proxy for how far
+    SPA has grown from identity-at-init (dev ``03`` §8); 0 at init, logged to W&B over training."""
+    ws = [ca.to_out.weight for ca in adapter.cross_attn]
+    return float(torch.stack([w.norm() for w in ws]).mean()) if ws else 0.0
+
+
+class _Tracker:
+    """Thin metric sink so the train loop never branches on the backend: ``tracker=wandb`` logs to
+    Weights & Biases (run config = hyperparams + provenance, dev ``04`` §11), ``tracker=null`` is a
+    no-op. ``resume='allow'`` + a stable ``wandb_id`` reattaches the same run after a Vertex restart."""
+
+    def __init__(self, cfg, provenance):
+        self.run = None
+        kind = str(cfg.train.get("tracker", None) or "null").lower()
+        if kind != "wandb":
+            return
+        import wandb
+
+        run_cfg = {
+            "variant": cfg.variant.name,
+            "conditioning": cfg.data.get("conditioning", None),
+            "lr": cfg.train.lr,
+            "max_steps": cfg.train.max_steps,
+            "grad_accum": cfg.hardware.get("grad_accum", 1),
+            "diffusion_batch_size": cfg.data.get("diffusion_batch_size", None),
+            "length_cap": cfg.data.get("length_cap", None),
+            "cfg_drop_rate": cfg.train.cfg_drop_rate,
+            "sampler": cfg.train.get("sampler", None),
+            "warmup_steps": cfg.train.get("warmup_steps", None),
+            **{f"prov/{k}": v for k, v in provenance.items() if k != "split_meta"},
+        }
+        wid = cfg.train.get("wandb_id", None)
+        self.run = wandb.init(
+            entity=cfg.train.get("wandb_entity", None),
+            project=cfg.train.get("wandb_project", None),
+            name=cfg.get("run_name", None),
+            id=(str(wid) if wid else None),
+            resume="allow",
+            config=run_cfg,
+            tags=[cfg.variant.name, str(cfg.data.get("conditioning", "na"))],
+        )
+
+    def log(self, metrics, step):
+        if self.run is not None:
+            self.run.log(metrics, step=step)
+
+    def finish(self):
+        if self.run is not None:
+            self.run.finish()
+
+
 def set_host_train_mode(net) -> None:
     """Enable RFD3's training-forward branch (``net.training=True``) but keep host dropout in eval."""
     net.train()
@@ -318,6 +370,7 @@ def train(cfg) -> None:
     ``data=cddb`` streams real featurized CDDB examples (kickoff step 8 Part B)."""
     import os
 
+    torch.set_float32_matmul_precision(str(cfg.train.get("matmul_precision", "high")))  # TF32 (dev 04 §11)
     device = resolve_device(cfg.hardware.device)
     engine = build_engine(cfg)
     net = frozen_rfd3_net(engine)
@@ -359,6 +412,8 @@ def train(cfg) -> None:
     ckpt_every = int(cfg.train.get("ckpt_every_steps", 0))
     val_every = int(cfg.train.get("val_every_steps", 0))
     do_val = val_every > 0 and cfg.data.name != "toy"  # validate needs the CDDB validate split
+    log_every = int(cfg.train.get("log_every_steps", 10))
+    tracker = _Tracker(cfg, provenance)
     os.makedirs(cfg.train.ckpt_dir, exist_ok=True)
 
     # Effective batch = ``grad_accum`` micro-steps (each one structure == a D-wide diffusion batch)
@@ -389,15 +444,18 @@ def train(cfg) -> None:
             accum_loss += loss.item()
             n_back += 1
         lr_now = sched.get_last_lr()[0]  # the LR actually applied at this step (before advancing)
+        gnorm = 0.0
         if n_back > 0:
-            torch.nn.utils.clip_grad_norm_(adapter.parameters(), cfg.train.grad_clip)
+            gnorm = float(torch.nn.utils.clip_grad_norm_(adapter.parameters(), cfg.train.grad_clip))
             opt.step()
         sched.step()
-        if step % 10 == 0 or step == cfg.train.max_steps - 1:
+        samples_seen += grad_accum
+        if step % log_every == 0 or step == cfg.train.max_steps - 1:
             avg = accum_loss / n_back if n_back else float("nan")
             print(f"step {step:5d} | loss {avg:.4f} | lr {lr_now:.2e}"
                   f"{'  (no-grad: skipped)' if n_back == 0 else ''}")
-        samples_seen += grad_accum
+            tracker.log({"train/loss": avg, "lr": lr_now, "grad_norm": gnorm,
+                         "spa/Wo_norm": _wo_norm(adapter), "samples_seen": samples_seen}, step=step)
         if ckpt_every and (step + 1) % ckpt_every == 0:
             save_checkpoint(last_path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
             snap = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_step{step + 1}.pt")
@@ -407,6 +465,7 @@ def train(cfg) -> None:
             vloss = validate(cfg, net, adapter, loss_fn, device, int(cfg.train.get("val_batches", 8)))
             if vloss is not None:
                 print(f"  val @ step {step + 1} | val_loss {vloss:.4f}")
+                tracker.log({"val/loss": vloss}, step=step)
         if max_hours is not None and (time.monotonic() - t0) >= float(max_hours) * 3600:
             print(f"time budget {max_hours}h reached at optimizer step {step}")
             break
@@ -416,3 +475,4 @@ def train(cfg) -> None:
     save_spa(adapter, export)  # adapter-only export for inference/validation (no optimizer state)
     print(f"done at optimizer step {step} | resume={os.path.basename(last_path)} "
           f"export={os.path.basename(export)} | samples_seen={samples_seen}")
+    tracker.finish()

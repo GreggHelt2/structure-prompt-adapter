@@ -5,12 +5,17 @@ weight_decay: 0.0
 optimizer: adamw
 warmup_steps: 500
 min_lr_ratio: 0.0      # warmup->cosine decays to this fraction of base LR (dev 04 §5)
+matmul_precision: high # TF32 on Ampere/Hopper float32 matmuls (dev 04 §11 recipe); "highest" = off
 grad_clip: 1.0
 cfg_drop_rate: 0.1     # zero-prompt dropout probability (dev 03 §8 / Q1.1: ~5–10%)
 se3_augment: true      # toy path only: random-rotation aug on TARGET coords (dev 03 §7).
                        # data=cddb -> harness forces this OFF (the RFD3 pipeline augments natively).
 masked_prompt_curriculum: false  # MVP skips it (dev 07 Q5.5)
-tracker: null          # null | wandb | tensorboard  (dev 07 W5.4 — undecided; install `[tracking]` if wandb)
+tracker: null          # null | wandb | tensorboard  (dev 07 W5.4; install `[tracking]` if wandb)
+wandb_entity: genomancer-consulting    # W&B account/team (Gregg-confirmed 2026-06-26)
+wandb_project: structure-prompt-adapter
+wandb_id: null         # set per run (e.g. spa-C-runA) to REATTACH the same W&B run after a Vertex restart
+log_every_steps: 10    # train-metric logging cadence (console print + W&B)
 ckpt_every_steps: 1000  # write rolling last.pt + a numbered snapshot every N optimizer steps
 resume: auto            # auto = resume from ckpt_dir/last.pt if present (else fresh); false to ignore
 val_every_steps: 1000   # periodic conditioned val-loss on the validate split (0=off; always off for toy)
