@@ -49,6 +49,9 @@ MAX_STEPS="${MAX_STEPS:-}"                          # short budget for the rehea
 TRACKER="${TRACKER:-}"                              # wandb (workstream C)
 MIN_FREE_GB="${MIN_FREE_GB:-}"                      # probe: set ~120 (full default 540 in run_train.sh)
 FETCH_HF="${FETCH_HF:-}"                            # 1 only for the variant-A/CLSS path
+RUN_MODE="${RUN_MODE:-}"                            # profile -> run scripts/profile_step.py (step timing) not train.py
+N_STEPS="${N_STEPS:-}"                              # profile: # steps to time (profiler default 40)
+NUM_WORKERS="${NUM_WORKERS:-}"                      # dataloader workers (train.num_workers override; H100 wants more)
 
 BOOT="set -e; git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} /opt/spa && bash /opt/spa/scripts/cloud/run_train.sh"
 
@@ -89,6 +92,9 @@ add_env MAX_STEPS "${MAX_STEPS}"
 add_env TRACKER "${TRACKER}"
 add_env MIN_FREE_GB "${MIN_FREE_GB}"
 add_env FETCH_HF "${FETCH_HF}"
+add_env RUN_MODE "${RUN_MODE}"
+add_env N_STEPS "${N_STEPS}"
+add_env NUM_WORKERS "${NUM_WORKERS}"
 
 # On-demand (default) OMITS scheduling (Vertex defaults to on-demand). SPOT/FLEX_START draw the separate
 # preemptible H100 quota (=0 here) -> opt in only with a quota bump.

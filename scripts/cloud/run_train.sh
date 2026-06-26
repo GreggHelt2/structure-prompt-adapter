@@ -193,14 +193,19 @@ OVERRIDES=( data=cddb hardware=cloud_h100 "variant=$VARIANT"
   "paths.rfd3_ckpt=$RFD3_CKPT" "paths.foundry_train_cfg_dir=$FOUNDRY_TRAIN_CFG_DIR"
   "train.ckpt_dir=$CKPT_DIR" "data.conditioning=$CONDITIONING"
   "data.require_cached_prompt=$REQUIRE_CACHED_PROMPT" )
-[ -n "${LENGTH_CAP:-}" ] && OVERRIDES+=( "data.length_cap=$LENGTH_CAP" )
-[ -n "${MAX_STEPS:-}" ]  && OVERRIDES+=( "train.max_steps=$MAX_STEPS" )
-[ -n "$TRACKER" ]        && OVERRIDES+=( "train.tracker=$TRACKER" )
+[ -n "${LENGTH_CAP:-}" ]  && OVERRIDES+=( "data.length_cap=$LENGTH_CAP" )
+[ -n "${MAX_STEPS:-}" ]   && OVERRIDES+=( "train.max_steps=$MAX_STEPS" )
+[ -n "${NUM_WORKERS:-}" ] && OVERRIDES+=( "train.num_workers=$NUM_WORKERS" )
+[ -n "$TRACKER" ]         && OVERRIDES+=( "train.tracker=$TRACKER" )
 
-log "SPA training: ${OVERRIDES[*]}"
+# RUN_MODE=profile runs the step profiler (scripts/profile_step.py) instead of training — same input
+# gathering above, so we measure steady-state step time + breakdown on the real H100 (dev 08 §6).
+ENTRY="scripts/train.py"; LABEL="SPA training"
+[ "${RUN_MODE:-train}" = "profile" ] && { ENTRY="scripts/profile_step.py"; LABEL="SPA step PROFILE"; }
+log "$LABEL: ${OVERRIDES[*]}"
 t_train=$SECONDS
-python "$SPA_REPO/scripts/train.py" "${OVERRIDES[@]}"
-log "training wall: $((SECONDS-t_train))s"
+python "$SPA_REPO/$ENTRY" "${OVERRIDES[@]}"
+log "wall: $((SECONDS-t_train))s"
 
 # --- 11) Final checkpoint rsync + summary -------------------------------------------------------------
 if [ -n "$CKPT_PID" ]; then kill "$CKPT_PID" 2>/dev/null || true; wait "$CKPT_PID" 2>/dev/null || true; fi
