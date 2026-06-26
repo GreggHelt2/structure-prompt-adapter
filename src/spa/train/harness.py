@@ -85,11 +85,14 @@ def spa_training_step(net, adapter, loss_fn, example, cfg, generator=None):
         R = random_rotation(generator)
         x_noisy, gt = apply_se3(x_noisy, R), apply_se3(gt, R)
 
+    prompt = example.get("prompt")
     drop = torch.rand(1, generator=generator).item() < cfg.train.cfg_drop_rate
-    if drop or example.get("prompt") is None:      # CFG zero-prompt dropout
+    if prompt is None:                             # no prompt available (e.g. toy) -> base only
         adapter.clear_prompt()
+    elif drop:                                     # CFG zero-prompt dropout -> learned null token e∅
+        adapter.set_null_prompt(prompt.shape[0])   # keeps SPA live so grad reaches the adapter (dev 11 §6)
     else:                                          # recompute K/V each step (grad -> prompt_kv);
-        adapter.set_prompt(example["prompt"], key_padding_mask=example.get("prompt_mask"))  # non-overlap mask
+        adapter.set_prompt(prompt, key_padding_mask=example.get("prompt_mask"))  # non-overlap mask
 
     out = net.forward(input={"X_noisy_L": x_noisy, "t": t, "f": f},
                       n_cycle=cfg.train.n_cycle)["X_L"].float()

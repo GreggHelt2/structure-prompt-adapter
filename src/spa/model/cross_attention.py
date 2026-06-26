@@ -53,10 +53,30 @@ class SPAPromptKV(nn.Module):
         nn.init.xavier_uniform_(self.to_k.weight)
         nn.init.xavier_uniform_(self.to_v.weight)
 
+        # Learned null token e∅ for CFG zero-prompt dropout — the faithful IP-Adapter recipe
+        # (dev ``11`` §6, ``07`` Q1.1): on a dropped training step the prompt is REPLACED by this
+        # trainable token (the cross-attn stays live), so a gradient still reaches the adapter —
+        # unlike bypassing the module, which zeroes the gradient and crashed the B1 smoke. Init
+        # NON-zero: a zero token would, with these bias-free K/V projections, give all-zero K/V and
+        # no gradient (the "thin null" failure, ``11`` §5). Identity-at-init is preserved by
+        # SPACrossAttention's zero-init ``Wo``, not by this token, so e∅ is free to be nonzero.
+        self.null_token = nn.Parameter(torch.empty(1, 1, c_kv))
+        nn.init.normal_(self.null_token, std=0.02)
+
     def forward(self, prompt: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """``prompt`` ``[D, M, c_kv]`` -> ``(k, v)`` each ``[D, M, c_model]``."""
         p = self.norm(prompt)
         return self.to_k(p), self.to_v(p)
+
+    def null_kv(self, batch: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """K/V for the learned null prompt e∅ — CFG zero-prompt dropout / a learned unconditional.
+
+        Returns a single null key/value (``M=1``) broadcast over ``batch``: ``(k, v)`` each
+        ``[batch, 1, c_model]``. ``batch`` must equal the query's diffusion batch ``D`` — the
+        cross-attn reshapes K/V with the query's batch dim, so the null can't rely on implicit
+        broadcast there (dev ``11`` §6).
+        """
+        return self.forward(self.null_token.expand(batch, -1, -1))
 
 
 class SPACrossAttention(nn.Module):

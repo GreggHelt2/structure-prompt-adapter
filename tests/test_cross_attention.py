@@ -77,6 +77,31 @@ def test_key_padding_mask_excludes_positions():
     assert torch.isfinite(masked).all()
 
 
+def test_null_token_kv_shape_and_gradient():
+    # The learned null token e∅ (CFG zero-prompt dropout, dev 11 §6) must (a) yield a single key/value
+    # of the right shape and (b) RECEIVE A GRADIENT — the whole point vs. bypassing SPA (which gives
+    # no gradient and crashed B1). Grown-in Wo so the term is live.
+    promptkv, spa = _make()
+    torch.nn.init.xavier_uniform_(spa.to_out.weight)
+    k, v = promptkv.null_kv(D)
+    assert k.shape == (D, 1, C_MODEL) and v.shape == (D, 1, C_MODEL)
+    query = torch.randn(D, I, C_QUERY)
+    out = spa(query, k, v)
+    assert out.shape == (D, I, C_QUERY)
+    out.sum().backward()
+    assert promptkv.null_token.grad is not None
+    assert torch.count_nonzero(promptkv.null_token.grad) > 0  # a real (non-thin) null -> gradient flows
+
+
+def test_null_token_identity_at_init_is_zero():
+    # With zero-init Wo, even the learned-null path is exactly zero at init -> the wrapped-no-prompt
+    # == vanilla-RFD3 identity gate is unaffected by adding e∅.
+    promptkv, spa = _make()
+    k, v = promptkv.null_kv(D)
+    query = torch.randn(D, I, C_QUERY)
+    assert torch.count_nonzero(spa(query, k, v)) == 0
+
+
 def test_c_model_not_divisible_by_heads_raises():
     try:
         SPACrossAttention(c_model=768, n_head=7)

@@ -91,7 +91,8 @@ class SPAAdapter(nn.Module):
 
     Use:
         ``set_prompt(prompt)`` once per design (before RFD3's forward) to project + stash K/V;
-        ``clear_prompt()`` for CFG zero-prompt dropout / the wrapped-no-prompt baseline;
+        ``set_null_prompt(D)`` for CFG zero-prompt dropout (the learned null token e∅, dev ``11`` §6);
+        ``clear_prompt()`` for the wrapped-no-prompt baseline (λ=0 / no prompt available);
         ``set_scale(λ)`` to tune prompt strength at inference.
     """
 
@@ -117,8 +118,22 @@ class SPAAdapter(nn.Module):
         k, v = self.prompt_kv(p)
         self._context.k, self._context.v, self._context.key_padding_mask = k, v, key_padding_mask
 
+    def set_null_prompt(self, batch: int) -> None:
+        """Stash the learned null-token K/V on the context — CFG zero-prompt dropout (dev ``11`` §6).
+
+        Use in place of :meth:`clear_prompt` on a *dropped* training step: the SPA cross-attn stays
+        **live** on the learned null token ``e∅`` (a single key/value), so a gradient still reaches
+        the adapter — clearing the prompt would bypass SPA entirely and zero the gradient (the B1
+        crash). ``batch`` is the step's diffusion batch ``D`` so the null K/V matches the query's
+        batch dim. The null bypasses the variant projector (prompt-absence is variant-agnostic).
+        """
+        k, v = self.prompt_kv.null_kv(batch)
+        self._context.k, self._context.v, self._context.key_padding_mask = k, v, None
+
     def clear_prompt(self) -> None:
-        """Drop the prompt ⇒ wrappers return base only (CFG zero-prompt dropout / baseline)."""
+        """Drop the prompt ⇒ wrappers return base only (the wrapped-no-prompt baseline: λ=0 / no
+        prompt available). NOTE: CFG zero-prompt dropout uses :meth:`set_null_prompt` instead, so a
+        gradient still flows to the adapter (dev ``11`` §6)."""
         self._context.k = self._context.v = self._context.key_padding_mask = None
 
     def set_scale(self, value: float) -> None:
