@@ -52,6 +52,9 @@ FETCH_HF="${FETCH_HF:-}"                            # 1 only for the variant-A/C
 RUN_MODE="${RUN_MODE:-}"                            # profile -> run scripts/profile_step.py (step timing) not train.py
 N_STEPS="${N_STEPS:-}"                              # profile: # steps to time (profiler default 40)
 NUM_WORKERS="${NUM_WORKERS:-}"                      # dataloader workers (train.num_workers override; H100 wants more)
+CKPT_OFF="${CKPT_OFF:-}"                            # profile: 1 -> disable RFD3 activation checkpointing
+MATMUL_PRECISION="${MATMUL_PRECISION:-}"           # profile: 'high'=TF32 | 'highest'=true fp32
+DSWEEP="${DSWEEP:-}"                                # profile: comma list of D to sweep (e.g. 4,8,32)
 
 BOOT="set -e; git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} /opt/spa && bash /opt/spa/scripts/cloud/run_train.sh"
 
@@ -95,6 +98,9 @@ add_env FETCH_HF "${FETCH_HF}"
 add_env RUN_MODE "${RUN_MODE}"
 add_env N_STEPS "${N_STEPS}"
 add_env NUM_WORKERS "${NUM_WORKERS}"
+add_env CKPT_OFF "${CKPT_OFF}"
+add_env MATMUL_PRECISION "${MATMUL_PRECISION}"
+add_env DSWEEP "${DSWEEP}"
 
 # On-demand (default) OMITS scheduling (Vertex defaults to on-demand). SPOT/FLEX_START draw the separate
 # preemptible H100 quota (=0 here) -> opt in only with a quota bump.
