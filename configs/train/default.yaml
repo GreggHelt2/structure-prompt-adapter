@@ -13,6 +13,8 @@ masked_prompt_curriculum: false  # MVP skips it (dev 07 Q5.5)
 tracker: null          # null | wandb | tensorboard  (dev 07 W5.4 — undecided; install `[tracking]` if wandb)
 ckpt_every_steps: 1000  # write rolling last.pt + a numbered snapshot every N optimizer steps
 resume: auto            # auto = resume from ckpt_dir/last.pt if present (else fresh); false to ignore
+val_every_steps: 1000   # periodic conditioned val-loss on the validate split (0=off; always off for toy)
+val_batches: 8          # validate structures averaged per check (dev 04 §8 early-stop signal)
 ckpt_dir: ${paths.ckpt_dir}
 seed: 0
 max_steps: 200         # OPTIMIZER-step budget (post grad-accum). Local sanity uses 200; the cloud
@@ -21,6 +23,8 @@ max_hours: null        # optional wall-clock early-stop; whichever of max_steps/
 n_cycle: 1             # RFD3 recycles per training forward
 num_workers: 2         # data=cddb dataloader workers for live featurization (dev 09 §8: >=2 hides it
                        # behind the GPU step — live featurization, no second cache)
+sampler: stratified    # stratified (length-balanced WeightedRandomSampler) | random (uniform shuffle); dev 04 §11
+sampler_bins: 20       # equal-width length bins for the stratified sampler
 capture_length: 24     # toy-overfit only: residue length for the synthetic-example capture run
 synthetic_target_offset: 3.0  # toy-overfit only: artificial target = vanilla output + this·N(0,1) Å
 

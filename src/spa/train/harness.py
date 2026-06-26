@@ -96,11 +96,13 @@ def set_host_train_mode(net) -> None:
             m.eval()
 
 
-def spa_training_step(net, adapter, loss_fn, example, cfg, generator=None):
+def spa_training_step(net, adapter, loss_fn, example, cfg, generator=None, drop_override=None):
     """One SPA training forward+loss on an example dict. Returns ``(loss, loss_dict)``.
 
     Example keys: ``feats``, ``t``, ``X_noisy_L``, ``X_gt_L_in_input_frame``, ``crd_mask_L``,
     ``is_original_unindexed_token``, ``prompt`` (``[D,N,1536]`` or ``None``).
+    ``drop_override``: force the CFG zero-prompt branch on/off (``None`` -> random per
+    ``cfg_drop_rate``); validation passes ``False`` to always measure the *conditioned* loss.
     """
     f, t = example["feats"], example["t"]
     x_noisy, gt = example["X_noisy_L"], example["X_gt_L_in_input_frame"]
@@ -110,7 +112,8 @@ def spa_training_step(net, adapter, loss_fn, example, cfg, generator=None):
         x_noisy, gt = apply_se3(x_noisy, R), apply_se3(gt, R)
 
     prompt = example.get("prompt")
-    drop = torch.rand(1, generator=generator).item() < cfg.train.cfg_drop_rate
+    drop = (bool(drop_override) if drop_override is not None
+            else torch.rand(1, generator=generator).item() < cfg.train.cfg_drop_rate)
     if prompt is None:                             # no prompt available (e.g. toy) -> base only
         adapter.clear_prompt()
     elif drop:                                     # CFG zero-prompt dropout -> learned null token e∅
@@ -229,6 +232,27 @@ def _single(batch):
     return batch[0]
 
 
+def _length_stratified_sampler(rows, n_bins, generator):
+    """``WeightedRandomSampler`` with inverse-bin-frequency weights over equal-width length bins, so
+    each length band is drawn ~equally often (balanced size coverage for a sub-epoch budget; dev
+    ``04`` §11). ``replacement=True`` upsamples rare (long) lengths."""
+    import numpy as np
+    from torch.utils.data import WeightedRandomSampler
+
+    lengths = rows["length"].to_numpy()
+    n = len(lengths)
+    lo, hi = float(lengths.min()), float(lengths.max())
+    if hi <= lo or n_bins < 2:
+        weights = np.ones(n, dtype=np.float64)
+    else:
+        edges = np.linspace(lo, hi, n_bins + 1)
+        b = np.clip(np.digitize(lengths, edges[1:-1]), 0, n_bins - 1)
+        counts = np.bincount(b, minlength=n_bins).astype(np.float64)
+        weights = 1.0 / counts[b]
+    return WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double),
+                                 num_samples=n, replacement=True, generator=generator)
+
+
 def _example_stream(cfg, engine, net, device):
     """Infinite iterator of on-device example dicts. ``toy`` -> one synthetic example; else the real
     ``CDDBPromptDataset`` via a DataLoader (live featurization in workers, moved to device here)."""
@@ -250,11 +274,43 @@ def _example_stream(cfg, engine, net, device):
                 f"(require_cached_prompt={cfg.data.get('require_cached_prompt', False)})."
             )
         nw = int(cfg.train.get("num_workers", 2))
-        loader = DataLoader(ds, batch_size=1, shuffle=True, collate_fn=_single,
-                            num_workers=nw, persistent_workers=nw > 0)
+        kind = str(cfg.train.get("sampler", "stratified")).lower()
+        if kind == "stratified":
+            g = torch.Generator().manual_seed(int(cfg.train.get("seed", 0)))
+            sampler = _length_stratified_sampler(ds.rows, int(cfg.train.get("sampler_bins", 20)), g)
+            loader = DataLoader(ds, batch_size=1, sampler=sampler, collate_fn=_single,
+                                num_workers=nw, persistent_workers=nw > 0)
+            print(f"sampler=stratified over {len(ds)} structures, "
+                  f"{int(cfg.train.get('sampler_bins', 20))} length bins")
+        else:
+            loader = DataLoader(ds, batch_size=1, shuffle=True, collate_fn=_single,
+                                num_workers=nw, persistent_workers=nw > 0)
         while True:
             for ex in loader:
                 yield move_to_device(ex, device)
+
+
+def validate(cfg, net, adapter, loss_fn, device, n_batches=8):
+    """Mean *conditioned* val-loss over ``n_batches`` from the ``validate`` split (no grad, no CFG
+    drop) — the early-stopping signal (dev ``04`` §8). Returns ``None`` if the split is empty."""
+    from torch.utils.data import DataLoader
+
+    from ..data.dataset import CDDBPromptDataset, move_to_device
+
+    ds = CDDBPromptDataset(cfg, split="validate")
+    if len(ds) == 0:
+        return None
+    loader = DataLoader(ds, batch_size=1, shuffle=True, collate_fn=_single, num_workers=0)
+    losses, it = [], iter(loader)
+    for _ in range(n_batches):
+        try:
+            ex = move_to_device(next(it), device)
+        except StopIteration:
+            break
+        with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16):
+            loss, _ = spa_training_step(net, adapter, loss_fn, ex, cfg, drop_override=False)
+        losses.append(loss.item())
+    return sum(losses) / len(losses) if losses else None
 
 
 def train(cfg) -> None:
@@ -301,6 +357,8 @@ def train(cfg) -> None:
         print(f"run already complete ({start_step} >= max_steps={cfg.train.max_steps}); nothing to do")
         return
     ckpt_every = int(cfg.train.get("ckpt_every_steps", 0))
+    val_every = int(cfg.train.get("val_every_steps", 0))
+    do_val = val_every > 0 and cfg.data.name != "toy"  # validate needs the CDDB validate split
     os.makedirs(cfg.train.ckpt_dir, exist_ok=True)
 
     # Effective batch = ``grad_accum`` micro-steps (each one structure == a D-wide diffusion batch)
@@ -345,6 +403,10 @@ def train(cfg) -> None:
             snap = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_step{step + 1}.pt")
             save_checkpoint(snap, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
             print(f"  checkpoint @ step {step + 1} -> last.pt + {os.path.basename(snap)}")
+        if do_val and (step + 1) % val_every == 0:
+            vloss = validate(cfg, net, adapter, loss_fn, device, int(cfg.train.get("val_batches", 8)))
+            if vloss is not None:
+                print(f"  val @ step {step + 1} | val_loss {vloss:.4f}")
         if max_hours is not None and (time.monotonic() - t0) >= float(max_hours) * 3600:
             print(f"time budget {max_hours}h reached at optimizer step {step}")
             break
