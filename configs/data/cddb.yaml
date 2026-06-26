@@ -30,6 +30,13 @@ split:
 # (A5000 small, H100 larger). Structures longer than this are skipped at load time.
 length_cap: 256
 
+# D — per-structure diffusion noise-replica count (RFD3 training default 32, from
+# datasets.diffusion_batch_size_train). The dominant per-step GPU multiplier: forward+backward scale
+# ~linearly with D. null = use the ckpt's 32; lowering it (e.g. 8) covers ~4x more DISTINCT structures
+# per hour at the cost of noisier per-structure gradients (dev 04 §11 / 08 §6 throughput profiling;
+# for a frozen-backbone adapter, structure diversity > noise-replicas of one structure).
+diffusion_batch_size: null
+
 # Local testing only: restrict the dataset to structures that already have a cached ESM3 prompt, so
 # the small local cache (a few structures) suffices. No-op on the full cloud cache. Default off.
 require_cached_prompt: false

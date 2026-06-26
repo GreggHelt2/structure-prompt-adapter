@@ -81,9 +81,9 @@ def _select_conditions(all_conditions: dict, conditioning: str) -> dict:
     raise ValueError(f"unknown conditioning={conditioning!r} (use 'unconditional' or 'island'/'mixed')")
 
 
-@functools.lru_cache(maxsize=4)
+@functools.lru_cache(maxsize=8)
 def build_train_transform(rfd3_ckpt: str, foundry_train_cfg_dir: str, sigma_data: int = 16,
-                          conditioning: str = "unconditional"):
+                          conditioning: str = "unconditional", diffusion_batch_size: int | None = None):
     """Reconstruct RFD3's CDDB-monomer **training** featurization pipeline (dev ``09`` §6/§8).
 
     Returns a Compose transform: parsed-structure dict -> example dict (``feats``, ``t``, ``noise``,
@@ -109,6 +109,8 @@ def build_train_transform(rfd3_ckpt: str, foundry_train_cfg_dir: str, sigma_data
     node.b_factor_min = None       # CDDB B-factors are 0-1; the cfg's 70 would drop EVERY atom
     node.sigma_data = sigma_data   # avoid the ${model...sigma_data} interpolation
     node.return_atom_array = False  # training consumes tensors, not the atom array
+    if diffusion_batch_size is not None:  # override D, the per-structure noise-replica count
+        node.diffusion_batch_size = int(diffusion_batch_size)  # default = datasets.diffusion_batch_size_train (32)
     root = OmegaConf.create({"datasets": tc.datasets, "model": tc.model, "tf": node})
     cont = _remap_targets(OmegaConf.to_container(root, resolve=True)["tf"])
     # Native conditioning is a curriculum knob (dev 10 §7): Run A = unconditional, Run B = + island
@@ -177,6 +179,7 @@ class CDDBPromptDataset(Dataset):
         return build_train_transform(
             self.cfg.paths.rfd3_ckpt, self.cfg.paths.foundry_train_cfg_dir,
             conditioning=self.cfg.data.get("conditioning", "unconditional"),
+            diffusion_batch_size=self.cfg.data.get("diffusion_batch_size", None),
         )
 
     def __len__(self) -> int:
