@@ -138,6 +138,91 @@ def load_spa(adapter, path) -> None:
     adapter.load_state_dict(torch.load(path, weights_only=True))
 
 
+def gather_provenance(cfg) -> dict:
+    """Best-effort run provenance stamped into every checkpoint (and the W&B run config, workstream
+    C): which split / ESM3 cache / RFD3 ckpt / git commit produced these weights (dev ``04`` §11
+    reproducibility). Never raises — provenance is informational, not load-bearing."""
+    import json
+    import os
+    import subprocess
+
+    prov = {
+        "variant": cfg.variant.name,
+        "conditioning": cfg.data.get("conditioning", None),
+        "esm3_cache_dir": cfg.paths.get("esm3_cache_dir", None),
+        "rfd3_ckpt": cfg.paths.get("rfd3_ckpt", None),
+        "split_id": None,
+        "git_commit": None,
+    }
+    for cand in (os.path.join(str(cfg.data.get("splits_root", "")), "split_meta.json"),
+                 os.path.join(str(cfg.paths.get("data_root", "")), "processed", "split_meta.json")):
+        try:
+            if cand and os.path.exists(cand):
+                with open(cand) as fh:
+                    meta = json.load(fh)
+                prov["split_id"] = meta.get("split_id", meta.get("name"))
+                prov["split_meta"] = meta
+                break
+        except Exception:
+            pass
+    try:  # git commit of THIS (public) repo — harness.py is at <repo>/src/spa/train/harness.py
+        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        prov["git_commit"] = subprocess.check_output(
+            ["git", "-C", repo, "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        pass
+    return prov
+
+
+def save_checkpoint(path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance) -> None:
+    """Atomic full-state checkpoint for resume: adapter + optimizer + scheduler + step + sample
+    counter + RNG (torch / cuda / sampling generator) + provenance (dev ``04`` §8). Written via a
+    ``.tmp`` rename so a crash mid-write never corrupts the rolling ``last.pt``."""
+    import os
+
+    ckpt = {
+        "adapter": adapter.state_dict(),
+        "optimizer": opt.state_dict(),
+        "scheduler": sched.state_dict(),
+        "step": int(step),
+        "samples_seen": int(samples_seen),
+        "gen": gen.get_state(),
+        "rng": {
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        },
+        "provenance": provenance,
+        "variant": cfg.variant.name,
+    }
+    tmp = f"{path}.tmp"
+    torch.save(ckpt, tmp)
+    os.replace(tmp, path)  # atomic on POSIX
+
+
+def load_checkpoint(path, adapter, opt, sched, gen, device):
+    """Restore a :func:`save_checkpoint` into the live adapter / opt / sched / gen + RNG. Returns
+    ``(step, samples_seen)`` of the LAST completed optimizer step — the caller resumes at ``step+1``.
+
+    Loads to CPU first (RNG byte-tensors must stay on CPU), then moves the Adam moments onto the
+    param device so a resumed ``opt.step`` doesn't hit a device mismatch."""
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    adapter.load_state_dict(ck["adapter"])  # adapter params stay on their device (cross-device copy)
+    opt.load_state_dict(ck["optimizer"])
+    for st in opt.state.values():
+        for k, v in st.items():
+            if torch.is_tensor(v):
+                st[k] = v.to(device)
+    sched.load_state_dict(ck["scheduler"])
+    gen.set_state(ck["gen"])
+    rng = ck.get("rng") or {}
+    if rng.get("torch") is not None:
+        torch.set_rng_state(rng["torch"])
+    if rng.get("cuda") is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(rng["cuda"])
+    return int(ck["step"]), int(ck.get("samples_seen", 0))
+
+
 def _single(batch):
     """DataLoader collate for batch_size=1: pass the one example dict through unstacked (each example
     is already a ``D``-wide diffusion batch; structures have different ``L`` so they can't be stacked)."""
@@ -175,6 +260,8 @@ def _example_stream(cfg, engine, net, device):
 def train(cfg) -> None:
     """Run SPA training from a composed Hydra config. ``data=toy`` overfits a synthetic example;
     ``data=cddb`` streams real featurized CDDB examples (kickoff step 8 Part B)."""
+    import os
+
     device = resolve_device(cfg.hardware.device)
     engine = build_engine(cfg)
     net = frozen_rfd3_net(engine)
@@ -199,6 +286,23 @@ def train(cfg) -> None:
     gen = torch.Generator().manual_seed(cfg.train.seed)
     stream = _example_stream(cfg, engine, net, device)
 
+    # Resume = auto: if a rolling last.pt exists, restore full state and continue at the next step
+    # (the cloud job rsyncs it DOWN from GCS at start — run_train.sh — so a preempted/restarted Vertex
+    # job picks up where it left off; dev ``04`` §8). `clear_prompt`/identity-at-init are untouched.
+    provenance = gather_provenance(cfg)
+    samples_seen, start_step = 0, 0
+    last_path = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_last.pt")
+    if str(cfg.train.get("resume", "auto")).lower() in ("auto", "true", "1") and os.path.exists(last_path):
+        start_step, samples_seen = load_checkpoint(last_path, adapter, opt, sched, gen, device)
+        start_step += 1  # the saved step is the last COMPLETED one; resume on the next
+        print(f"resumed from {last_path}: continuing at optimizer step {start_step} "
+              f"(samples_seen={samples_seen})")
+    if start_step >= cfg.train.max_steps:
+        print(f"run already complete ({start_step} >= max_steps={cfg.train.max_steps}); nothing to do")
+        return
+    ckpt_every = int(cfg.train.get("ckpt_every_steps", 0))
+    os.makedirs(cfg.train.ckpt_dir, exist_ok=True)
+
     # Effective batch = ``grad_accum`` micro-steps (each one structure == a D-wide diffusion batch)
     # per OPTIMIZER step; ``max_steps`` counts optimizer steps and the run is driven by a step/time
     # budget, not epochs (sub-epoch reality, dev ``04`` §11). The toy path overfits ONE repeated
@@ -210,7 +314,7 @@ def train(cfg) -> None:
     import time
 
     t0 = time.monotonic()
-    for step in range(cfg.train.max_steps):
+    for step in range(start_step, cfg.train.max_steps):
         opt.zero_grad()
         accum_loss, n_back = 0.0, 0
         for _ in range(grad_accum):
@@ -235,12 +339,18 @@ def train(cfg) -> None:
             avg = accum_loss / n_back if n_back else float("nan")
             print(f"step {step:5d} | loss {avg:.4f} | lr {lr_now:.2e}"
                   f"{'  (no-grad: skipped)' if n_back == 0 else ''}")
+        samples_seen += grad_accum
+        if ckpt_every and (step + 1) % ckpt_every == 0:
+            save_checkpoint(last_path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
+            snap = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_step{step + 1}.pt")
+            save_checkpoint(snap, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
+            print(f"  checkpoint @ step {step + 1} -> last.pt + {os.path.basename(snap)}")
         if max_hours is not None and (time.monotonic() - t0) >= float(max_hours) * 3600:
             print(f"time budget {max_hours}h reached at optimizer step {step}")
             break
 
-    import os
-    os.makedirs(cfg.train.ckpt_dir, exist_ok=True)
-    out = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_last.pt")
-    save_spa(adapter, out)
-    print(f"saved SPA checkpoint -> {out}")
+    save_checkpoint(last_path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
+    export = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_final.pt")
+    save_spa(adapter, export)  # adapter-only export for inference/validation (no optimizer state)
+    print(f"done at optimizer step {step} | resume={os.path.basename(last_path)} "
+          f"export={os.path.basename(export)} | samples_seen={samples_seen}")

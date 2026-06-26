@@ -11,7 +11,8 @@ se3_augment: true      # toy path only: random-rotation aug on TARGET coords (de
                        # data=cddb -> harness forces this OFF (the RFD3 pipeline augments natively).
 masked_prompt_curriculum: false  # MVP skips it (dev 07 Q5.5)
 tracker: null          # null | wandb | tensorboard  (dev 07 W5.4 — undecided; install `[tracking]` if wandb)
-ckpt_every_steps: 1000
+ckpt_every_steps: 1000  # write rolling last.pt + a numbered snapshot every N optimizer steps
+resume: auto            # auto = resume from ckpt_dir/last.pt if present (else fresh); false to ignore
 ckpt_dir: ${paths.ckpt_dir}
 seed: 0
 max_steps: 200         # OPTIMIZER-step budget (post grad-accum). Local sanity uses 200; the cloud
