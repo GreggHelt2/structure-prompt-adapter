@@ -170,9 +170,22 @@ if [ -z "$FOUNDRY_TRAIN_CFG_DIR" ] || [ ! -f "$FOUNDRY_TRAIN_CFG_DIR/pdb/base_tr
 fi
 log "FOUNDRY_TRAIN_CFG_DIR=$FOUNDRY_TRAIN_CFG_DIR"
 
-# --- 9) Background checkpoint: rsync the SPA ckpt dir up every CHECKPOINT_SEC (mirror cache-gen) -------
-# NOTE: the harness today saves once at max_steps end; periodic-during-training checkpointing + resume is
-# workstream C. This bg-rsync still validates the GCS checkpoint plumbing for the rehearsal.
+# --- 8b) RESUME: pull any prior checkpoint for THIS run DOWN from GCS so the harness (resume=auto)
+# continues after a Vertex restart/preemption (workstream C). First run -> nothing to pull. The harness
+# then finds $CKPT_DIR/spa_<variant>_last.pt and resumes at the next optimizer step. ------------------
+log "resume: checking for a prior checkpoint at $CKPT_OUT_URI"
+if gcloud storage ls "$CKPT_OUT_URI/**" >/dev/null 2>&1; then
+  gcloud storage rsync -r "$CKPT_OUT_URI" "$CKPT_DIR" \
+    && log "  prior checkpoint restored -> $CKPT_DIR ($(find "$CKPT_DIR" -maxdepth 1 -name '*_last.pt' | wc -l) last.pt)" \
+    || log "  resume rsync issues (continuing fresh)"
+else
+  log "  no prior checkpoint at $CKPT_OUT_URI (fresh run)"
+fi
+
+# --- 9) Background checkpoint: rsync the SPA ckpt dir UP every CHECKPOINT_SEC (mirror cache-gen) -------
+# The harness now checkpoints periodically (rolling last.pt + numbered snapshots) and resumes from
+# last.pt (workstream C); this bg-rsync ships them to GCS, and step 8b pulled any prior ones DOWN, so a
+# preempted/restarted job continues where it left off.
 CKPT_PID=""
 if [ "${CHECKPOINT_SEC:-0}" -gt 0 ]; then
   ( while sleep "$CHECKPOINT_SEC"; do
@@ -197,6 +210,13 @@ OVERRIDES=( data=cddb hardware=cloud_h100 "variant=$VARIANT"
 [ -n "${MAX_STEPS:-}" ]   && OVERRIDES+=( "train.max_steps=$MAX_STEPS" )
 [ -n "${NUM_WORKERS:-}" ] && OVERRIDES+=( "train.num_workers=$NUM_WORKERS" )
 [ -n "$TRACKER" ]         && OVERRIDES+=( "train.tracker=$TRACKER" )
+[ -n "${DIFFUSION_BATCH_SIZE:-}" ] && OVERRIDES+=( "data.diffusion_batch_size=$DIFFUSION_BATCH_SIZE" )  # D (recipe=8)
+[ -n "${MATMUL_PRECISION:-}" ]     && OVERRIDES+=( "train.matmul_precision=$MATMUL_PRECISION" )
+# Distinct, resumable W&B run per job: name + stable id from $NAME so a Vertex restart REATTACHES the
+# same run (Run A vs Run B differ by $NAME), matching the ckpt resume above.
+if [ "$TRACKER" = "wandb" ] && [ -n "${NAME:-}" ]; then
+  OVERRIDES+=( "run_name=$NAME" "train.wandb_id=$NAME" )
+fi
 
 # RUN_MODE=profile runs the step profiler (scripts/profile_step.py) instead of training — same input
 # gathering above, so we measure steady-state step time + breakdown on the real H100 (dev 08 §6).

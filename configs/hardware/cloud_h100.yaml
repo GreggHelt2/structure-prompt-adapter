@@ -4,7 +4,7 @@ name: cloud_h100
 device: cuda:0
 precision: bf16
 batch_size: 4
-grad_accum: 2
+grad_accum: 4           # locked MVP recipe: 30k opt-steps × grad_accum 4 ≈ 120k forwards ≈ 10 h (dev 04 §11)
 protein_length_cap: 512
 num_workers: 8
 fp8: false              # optional H100-only (FP8/TransformerEngine) — keep feature-flagged (dev root CLAUDE.md)

@@ -16,8 +16,13 @@
 #   REGION=us-central1 CACHE_TAR=gs://genomancer-spa-cache/esm3_cache_probe1k.tar \
 #     REQUIRE_CACHED_PROMPT=true MAX_STEPS=20 CHECKPOINT_SEC=120 DISK_GB=200 MIN_FREE_GB=120 \
 #     ./submit_train_job.sh
-#   # FULL run (after step 9's esm3_cache.tar lands), us-west1:
-#   REGION=us-west1 CACHE_TAR=gs://genomancer-spa-cache/esm3_cache.tar DISK_GB=650 ./submit_train_job.sh
+#   # FULL runs (after step 9's esm3_cache.tar lands) — locked recipe D=8, length_cap=384, ~30k steps,
+#   # W&B; Run A (us-central1, unconditional) ∥ Run B (us-west1, island). NAME makes the W&B run + ckpt
+#   # path distinct AND resumable on restart:
+#   REGION=us-central1 CONDITIONING=unconditional NAME=spa-C-runA DIFFUSION_BATCH_SIZE=8 LENGTH_CAP=384 \
+#     MAX_STEPS=30000 TRACKER=wandb DISK_GB=650 ./submit_train_job.sh
+#   REGION=us-west1    CONDITIONING=island        NAME=spa-C-runB DIFFUSION_BATCH_SIZE=8 LENGTH_CAP=384 \
+#     MAX_STEPS=30000 TRACKER=wandb DISK_GB=650 ./submit_train_job.sh
 #
 # Safety: a malformed spec is rejected by the Vertex API *before* any machine is provisioned (free).
 set -euo pipefail
@@ -55,6 +60,7 @@ NUM_WORKERS="${NUM_WORKERS:-}"                      # dataloader workers (train.
 CKPT_OFF="${CKPT_OFF:-}"                            # profile: 1 -> disable RFD3 activation checkpointing
 MATMUL_PRECISION="${MATMUL_PRECISION:-}"           # profile: 'high'=TF32 | 'highest'=true fp32
 DSWEEP="${DSWEEP:-}"                                # profile: comma list of D to sweep (e.g. 4,8,32)
+DIFFUSION_BATCH_SIZE="${DIFFUSION_BATCH_SIZE:-}"    # D — per-structure diffusion replicas (locked recipe=8; null->ckpt's 32)
 
 BOOT="set -e; git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} /opt/spa && bash /opt/spa/scripts/cloud/run_train.sh"
 
@@ -101,6 +107,7 @@ add_env NUM_WORKERS "${NUM_WORKERS}"
 add_env CKPT_OFF "${CKPT_OFF}"
 add_env MATMUL_PRECISION "${MATMUL_PRECISION}"
 add_env DSWEEP "${DSWEEP}"
+add_env DIFFUSION_BATCH_SIZE "${DIFFUSION_BATCH_SIZE}"
 
 # On-demand (default) OMITS scheduling (Vertex defaults to on-demand). SPOT/FLEX_START draw the separate
 # preemptible H100 quota (=0 here) -> opt in only with a quota bump.
