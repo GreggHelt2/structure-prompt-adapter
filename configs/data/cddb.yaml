@@ -45,3 +45,9 @@ require_cached_prompt: false
 # (Run B — motif scaffolding + SPA on the non-motif scaffold, via prompt-row masking). `island`
 # re-enables indexed fixed-coord motifs; the SPA prompt then masks those motif rows (non-overlap).
 conditioning: unconditional
+
+# Run-B motif sampler (dev 10 §7.3): true = the coupled total-then-partition island sampler
+# (1–5 islands weighted to fewer; total ~10–35% of L, floor 8, cap 50; per-island ≥4 res — bounds
+# grounded in MotifBench / Genie2). false = RFD3's stock independent sampler (2–5 × 1–12, can be
+# degenerate). Only affects conditioning=island/mixed.
+coupled_motif: true

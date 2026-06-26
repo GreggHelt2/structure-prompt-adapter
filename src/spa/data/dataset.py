@@ -57,7 +57,7 @@ def _remap_targets(d):
     return d
 
 
-def _select_conditions(all_conditions: dict, conditioning: str) -> dict:
+def _select_conditions(all_conditions: dict, conditioning: str, coupled_motif: bool = True) -> dict:
     """Select + reweight RFD3's native ``train_conditions`` for the SPA curriculum (dev ``10`` §7.3).
 
     - ``"unconditional"``: no native conditioning (**Run A**) — full-structure denoise.
@@ -77,13 +77,16 @@ def _select_conditions(all_conditions: dict, conditioning: str) -> dict:
         island["p_unindex_motif_tokens"] = 0.0   # indexed -> token count == residue count (prompt aligns)
         island["p_fix_motif_coordinates"] = 1.0  # always a hard fixed-coord motif
         island["p_fix_motif_sequence"] = 0.0     # fix geometry only; sequence stays diffused
+        if coupled_motif:  # swap RFD3's independent island sampler for our coupled total-then-partition
+            island["_target_"] = "spa.data.conditions.CoupledIslandCondition"  # bounds = class defaults (dev 10 §7.3)
         return {"unconditional": uncond, "island": island}
     raise ValueError(f"unknown conditioning={conditioning!r} (use 'unconditional' or 'island'/'mixed')")
 
 
-@functools.lru_cache(maxsize=8)
+@functools.lru_cache(maxsize=16)
 def build_train_transform(rfd3_ckpt: str, foundry_train_cfg_dir: str, sigma_data: int = 16,
-                          conditioning: str = "unconditional", diffusion_batch_size: int | None = None):
+                          conditioning: str = "unconditional", diffusion_batch_size: int | None = None,
+                          coupled_motif: bool = True):
     """Reconstruct RFD3's CDDB-monomer **training** featurization pipeline (dev ``09`` §6/§8).
 
     Returns a Compose transform: parsed-structure dict -> example dict (``feats``, ``t``, ``noise``,
@@ -115,7 +118,7 @@ def build_train_transform(rfd3_ckpt: str, foundry_train_cfg_dir: str, sigma_data
     cont = _remap_targets(OmegaConf.to_container(root, resolve=True)["tf"])
     # Native conditioning is a curriculum knob (dev 10 §7): Run A = unconditional, Run B = + island
     # motif scaffolding. Drop the external-binary hbond feature (hbplus) regardless.
-    cont["train_conditions"] = _select_conditions(cont["train_conditions"], conditioning)
+    cont["train_conditions"] = _select_conditions(cont["train_conditions"], conditioning, coupled_motif)
     cont["meta_conditioning_probabilities"]["calculate_hbonds"] = 0.0
     return hydra.utils.instantiate(OmegaConf.create(cont))
 
@@ -180,6 +183,7 @@ class CDDBPromptDataset(Dataset):
             self.cfg.paths.rfd3_ckpt, self.cfg.paths.foundry_train_cfg_dir,
             conditioning=self.cfg.data.get("conditioning", "unconditional"),
             diffusion_batch_size=self.cfg.data.get("diffusion_batch_size", None),
+            coupled_motif=self.cfg.data.get("coupled_motif", True),
         )
 
     def __len__(self) -> int:
