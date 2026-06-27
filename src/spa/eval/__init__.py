@@ -9,5 +9,6 @@ from the RFD3 AtomArray).
 """
 
 from .generate import Design, generate
+from .proteinmpnn import SequenceSet, inverse_fold, run_proteinmpnn
 
-__all__ = ["Design", "generate"]
+__all__ = ["Design", "generate", "SequenceSet", "inverse_fold", "run_proteinmpnn"]

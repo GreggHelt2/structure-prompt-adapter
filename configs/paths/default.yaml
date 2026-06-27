@@ -7,6 +7,11 @@ data_root: ${paths.project_root}/training_data
 # dev 09 §6/§8). A dependency-repo path -> config, overridable on cloud where foundry is installed.
 foundry_train_cfg_dir: ${paths.project_root}/needed_repos/foundry/models/rfd3/configs/datasets/train
 
+# ProteinMPNN repo (dev 05 Stage 2 inverse folding). Read-only dependency-repo path -> config,
+# overridable on cloud (env SPA_PROTEINMPNN_REPO also overrides). Weights bundled in-repo
+# (vanilla_model_weights/v_48_020.pt is the default).
+proteinmpnn_repo: ${paths.project_root}/needed_repos/ProteinMPNN
+
 # Frozen-host weights (dev root CLAUDE.md → Model Weights). RFD3 ckpt_path accepts an arbitrary path.
 rfd3_ckpt: ${paths.models_root}/rfdiffusion3/rfd3_latest.ckpt
 # ESM3 loads from the HF cache by name (esm3_sm_open_v1), not a path here. CLSS (variant A only)
