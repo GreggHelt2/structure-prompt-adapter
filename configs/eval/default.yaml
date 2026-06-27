@@ -42,3 +42,13 @@ score:
   tm_norm: prompt         # primary adherence TM normalization: prompt (fraction of prompt fold) | design | max
   diversity: true         # pairwise-TM diversity among the designable set (lower mean TM = more diverse)
   novelty: false          # novelty-vs-PDB (Foldseek) — stubbed; true raises NotImplemented until wired up
+
+# SPA flywheel orchestration knobs (dev 05_validation_pipeline.md §1–§4 — wires Stages 1→4 end-to-end).
+# Stage 3 (OpenFold3 refold) is pluggable + STUBBED: with refolder=null, designability is skipped and
+# scoring is adherence-only. Reuses eval.conditions/lambda_scale/num_designs (Stage 1), proteinmpnn
+# (Stage 2), and score (Stage 4) above — only the two flywheel-specific knobs live here.
+flywheel:
+  prompt_struct: null     # structure file to score prompt-adherence against; null -> eval.prompt_pdb
+                          #   (eval.prompt_cache is an ESM3 tensor, not a structure, so it cannot serve here)
+  refolder: null          # OF3 refolder (a Hydra _target_ spec satisfying score.Refolder); null -> skip
+                          #   designability (adherence-only). OF3 is NOT implemented — this is the injection point.

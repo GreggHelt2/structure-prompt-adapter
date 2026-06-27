@@ -8,6 +8,7 @@ downstream ProteinMPNN → OpenFold3 stages (the dev ``05`` F1.5.2 CIF→PDB han
 from the RFD3 AtomArray).
 """
 
+from .flywheel import run_flywheel
 from .generate import Design, generate
 from .proteinmpnn import SequenceSet, inverse_fold, run_proteinmpnn
 from .score import (
@@ -35,6 +36,8 @@ __all__ = [
     "SequenceSet",
     "inverse_fold",
     "run_proteinmpnn",
+    # flywheel driver (orchestration)
+    "run_flywheel",
     # scoring (Stage 4)
     "Adherence",
     "ConditionSummary",
