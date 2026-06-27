@@ -1,0 +1,18 @@
+# Top-level SPA Stage-1 design-generation config (dev 05_validation_pipeline.md flywheel, Stage 0).
+# Compose with overrides, e.g.:
+#   python scripts/eval/generate.py variant=C_n_by_1536 eval.prompt_pdb=/path/p.pdb eval.num_designs=8
+defaults:
+  - paths: default
+  - model: spa
+  - variant: C_n_by_1536   # primary variant; switch to B_* / A_* for the variant comparison
+  - hardware: local_a5000  # local_a5000 | cloud_h100 — the ONLY thing that changes A5000->H100
+  - eval: default
+  - _self_
+
+run_name: spa-eval-${variant.name}
+
+hydra:
+  run:
+    dir: ${eval.out_dir}/_hydra/${run_name}/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: ${eval.out_dir}/_hydra/multirun/${run_name}/${now:%Y-%m-%d_%H-%M-%S}

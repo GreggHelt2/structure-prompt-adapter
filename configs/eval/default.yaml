@@ -1,0 +1,18 @@
+# SPA Stage-1 design-generation knobs (dev 05_validation_pipeline.md "Stage 0 — Generate (RFD3 ± SPA)").
+# All cost knobs (K, λ, length, sampler steps) are tuned at run time — nothing here is hardcoded in code.
+ckpt: null                 # trained SPA adapter checkpoint (null -> untrained zero-init == identity/vanilla)
+conditions: [baseline, spa]   # baseline (clear_prompt == vanilla RFD3) and/or spa (set_prompt + λ)
+lambda_scale: 1.0          # SPA strength λ; float or list (swept for spa only; baseline is λ=0). 0 -> unconditional
+num_designs: 8             # K designs per (condition, λ) — the RFD3 diffusion batch (one engine.run -> K backbones)
+length: 100                # design length (residues) for unconditional generation
+specification: null        # optional RFD3 DesignInputSpecification dict (augments/overrides `length`)
+num_timesteps: null        # RFD3 sampler steps (null -> engine default 200; lower = faster/cheaper)
+seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
+
+# Prompt for condition=spa (the same structure-only ESM3 tap training used). Provide ONE:
+prompt_pdb: null           # a structure file -> spa.prompt.esm3_prompt -> [N,1536] (ESM3 loaded once, then freed)
+prompt_cache: null         # OR a precomputed [N,1536] .pt (cloud/ESM3 cache reuse; skips ESM3)
+use_sequence: false        # structure-only prompt by default (dev 01 §3.5)
+prompt_id: null            # output-name group id (null -> prompt file stem, else "design")
+
+out_dir: ./outputs/eval/generate   # relative -> resolved against the original cwd under Hydra
