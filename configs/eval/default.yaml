@@ -32,3 +32,13 @@ proteinmpnn:
   designs: null           # explicit list of design PDBs; null -> design_dir / eval.out_dir glob *.pdb
   design_dir: null        # dir of Stage-1 design PDBs; null -> eval.out_dir (the Stage-1 output dir)
   out_dir: ./outputs/eval/seqs   # FASTAs land in <out_dir>/seqs/<design_stem>.fa (ProteinMPNN layout)
+
+# SPA Stage-4 scoring knobs (dev 05_validation_pipeline.md §3 "Metrics" / 06_experiments.md §6).
+# Designability = best-of-K Cα scRMSD vs OF3 refolds; adherence = TM-score (+ Cα prompt-RMSD) vs the
+# prompt's source structure. All thresholds are knobs (dev root CLAUDE.md), never hardcoded in code.
+score:
+  scrmsd_cutoff: 2.0      # Å — best-of-K Cα scRMSD designability threshold (dev 05 §3 / 06 §6)
+  plddt_cutoff: 80.0      # OF3 pLDDT designability gate (applied only when a pLDDT is supplied)
+  tm_norm: prompt         # primary adherence TM normalization: prompt (fraction of prompt fold) | design | max
+  diversity: true         # pairwise-TM diversity among the designable set (lower mean TM = more diverse)
+  novelty: false          # novelty-vs-PDB (Foldseek) — stubbed; true raises NotImplemented until wired up

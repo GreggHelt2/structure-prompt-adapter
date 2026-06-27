@@ -26,6 +26,9 @@ dependencies = [
 dev = ["pytest>=7"]
 # Experiment tracker is an open decision (dev 07 W5.4) — install on demand, not by default.
 tracking = ["wandb"]
+# Validation-flywheel scoring (stage 4): TM-score adherence via tmtools (a TMalign wrapper).
+# biotite (Cα RMSD) is already provided by the spa-dev stack (atomworks), so it is not re-listed.
+eval = ["tmtools"]
 
 [project.urls]
 Homepage = "https://github.com/GreggHelt2/structure-prompt-adapter"

@@ -10,5 +10,46 @@ from the RFD3 AtomArray).
 
 from .generate import Design, generate
 from .proteinmpnn import SequenceSet, inverse_fold, run_proteinmpnn
+from .score import (
+    Adherence,
+    ConditionSummary,
+    DeltaSummary,
+    DesignScore,
+    Refolder,
+    ScoreConfig,
+    SelfConsistency,
+    adherence,
+    aggregate,
+    ca_rmsd,
+    delta_vs_baseline,
+    is_designable,
+    pairwise_tm_diversity,
+    score_design,
+    self_consistency,
+    tm_score,
+)
 
-__all__ = ["Design", "generate", "SequenceSet", "inverse_fold", "run_proteinmpnn"]
+__all__ = [
+    "Design",
+    "generate",
+    "SequenceSet",
+    "inverse_fold",
+    "run_proteinmpnn",
+    # scoring (Stage 4)
+    "Adherence",
+    "ConditionSummary",
+    "DeltaSummary",
+    "DesignScore",
+    "Refolder",
+    "ScoreConfig",
+    "SelfConsistency",
+    "adherence",
+    "aggregate",
+    "ca_rmsd",
+    "delta_vs_baseline",
+    "is_designable",
+    "pairwise_tm_diversity",
+    "score_design",
+    "self_consistency",
+    "tm_score",
+]
