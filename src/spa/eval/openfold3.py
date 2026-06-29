@@ -90,15 +90,15 @@ class OF3Refolder:
     # Query JSON + command assembly + output-path reconstruction
     # ----------------------------------------------------------------------------------------------
 
+    @staticmethod
+    def _chain(seq) -> dict:
+        """One single-chain protein query body (cleaned sequence; drop ProteinMPNN '/' chain seps)."""
+        clean = str(seq).replace("/", "").strip()
+        return {"chains": [{"molecule_type": "protein", "chain_ids": ["A"], "sequence": clean}]}
+
     def _build_query_json(self, sequences: list[str]) -> dict:
-        """One single-chain protein query per (cleaned) sequence, keyed ``q{i}`` (dev ``05`` schema)."""
-        queries = {}
-        for i, seq in enumerate(sequences):
-            clean = str(seq).replace("/", "").strip()  # drop ProteinMPNN multi-chain separators
-            queries[f"q{i}"] = {
-                "chains": [{"molecule_type": "protein", "chain_ids": ["A"], "sequence": clean}]
-            }
-        return {"queries": queries}
+        """One single-chain protein query per sequence, keyed ``q{i}`` (dev ``05`` schema)."""
+        return {"queries": {f"q{i}": self._chain(s) for i, s in enumerate(sequences)}}
 
     def _build_command(self, query_json: Path, run_dir: Path) -> list[str]:
         cmd = [
@@ -114,50 +114,47 @@ class OF3Refolder:
             cmd = ["conda", "run", "-n", str(self.conda_env)] + cmd
         return cmd
 
-    def _refold_path(self, run_dir: Path, i: int) -> Path:
-        """The cif OF3 writes for query ``q{i}`` (writer.py: ``{id}/seed_{S}/{id}_seed_{S}_sample_1_*``)."""
-        qid = f"q{i}"
+    def _cif_path(self, run_dir: Path, qid: str) -> Path:
+        """The cif OF3 writes for query ``qid`` (writer.py: ``{id}/seed_{S}/{id}_seed_{S}_sample_1_*``)."""
         return run_dir / qid / f"seed_{self.seed}" / f"{qid}_seed_{self.seed}_sample_1_model.{self.structure_format}"
+
+    def _run_openfold(self, query_payload: dict, run_dir: Path) -> None:
+        """Write the multi-query JSON, run ONE ``run_openfold`` subprocess (model loads once), raise on
+        failure. Shared by :meth:`refold` (one backbone) and :meth:`refold_all` (the whole matrix)."""
+        run_dir.mkdir(parents=True, exist_ok=True)
+        query_json = run_dir / "queries.json"
+        with open(query_json, "w") as fh:
+            json.dump(query_payload, fh)
+        env = os.environ.copy()
+        if self.cuda_visible_devices is not None:
+            env["CUDA_VISIBLE_DEVICES"] = str(self.cuda_visible_devices)
+        cmd = self._build_command(query_json, run_dir)
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"OpenFold3 refold failed (exit {proc.returncode}) for {run_dir.name}.\n"
+                f"cmd: {' '.join(cmd)}\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}"
+            )
 
     # ----------------------------------------------------------------------------------------------
     # Refolder protocol
     # ----------------------------------------------------------------------------------------------
 
     def refold(self, sequence_set) -> list:
-        """Refold every sequence in ``sequence_set`` → list of OF3 refold ``.cif`` paths (best-of-K).
-
-        One ``run_openfold`` subprocess for the whole set (model loads once). Returns only the cif
-        paths that actually got written (a fold that failed to emit is dropped + warned, so the
-        best-of-K simply has fewer candidates rather than poisoning the scRMSD with a bad path).
-        """
+        """Refold ONE backbone's sequences (one ``run_openfold`` subprocess; model loads once). Returns
+        the cif paths that got written (a missing one is dropped + warned, so best-of-K just has fewer
+        candidates than poisoning the scRMSD with a bad path)."""
         name = getattr(sequence_set, "name", "design")
         sequences = list(getattr(sequence_set, "sequences", []) or [])
         if not sequences:
             print(f"[of3] {name}: no sequences to refold -> skipping.")
             return []
-
         run_dir = self.out_dir / "of3" / name
-        run_dir.mkdir(parents=True, exist_ok=True)
-        query_json = run_dir / "queries.json"
-        with open(query_json, "w") as fh:
-            json.dump(self._build_query_json(sequences), fh)
-
-        env = os.environ.copy()
-        if self.cuda_visible_devices is not None:
-            env["CUDA_VISIBLE_DEVICES"] = str(self.cuda_visible_devices)
-
-        cmd = self._build_command(query_json, run_dir)
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"OpenFold3 refold failed (exit {proc.returncode}) for {name}.\n"
-                f"cmd: {' '.join(cmd)}\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}"
-            )
-
+        self._run_openfold({"queries": {f"q{i}": self._chain(s) for i, s in enumerate(sequences)}}, run_dir)
         refolds: list[str] = []
         missing = 0
         for i in range(len(sequences)):
-            cif = self._refold_path(run_dir, i)
+            cif = self._cif_path(run_dir, f"q{i}")
             if cif.exists():
                 refolds.append(str(cif))
             else:
@@ -166,3 +163,37 @@ class OF3Refolder:
             print(f"[of3] {name}: {missing}/{len(sequences)} refold(s) missing on disk (dropped).")
         print(f"[of3] {name} -> {len(refolds)} refold(s) in {run_dir}")
         return refolds
+
+    def refold_all(self, sequence_sets) -> dict:
+        """**Batched** refold across MANY backbones in ONE ``run_openfold`` subprocess — the model loads
+        **once for the whole matrix**, amortizing the ~45 s/process startup (import+CUDA+build) that
+        dominates per-backbone refolding (≈ halves eval wall-time at scale). Returns
+        ``{design_name: [refold cif paths]}``. The flywheel uses this when present (else per-design
+        :meth:`refold`). **Peak VRAM is unchanged** — OF3 still folds queries sequentially (peak = a
+        single fold, length-driven). Query ids ``d{i}_q{j}`` map back to (design i, seq j) for grouping.
+        """
+        sets = list(sequence_sets)
+        queries: dict = {}
+        names: list[str] = []
+        nseq: list[int] = []
+        for i, ss in enumerate(sets):
+            names.append(getattr(ss, "name", f"design{i}"))
+            seqs = list(getattr(ss, "sequences", []) or [])
+            nseq.append(len(seqs))
+            for j, s in enumerate(seqs):
+                queries[f"d{i}_q{j}"] = self._chain(s)
+        out: dict = {nm: [] for nm in names}
+        if not queries:
+            print("[of3] refold_all: no sequences across any backbone -> skipping.")
+            return out
+        run_dir = self.out_dir / "of3_batch"
+        self._run_openfold({"queries": queries}, run_dir)
+        total = 0
+        for i, nm in enumerate(names):
+            for j in range(nseq[i]):
+                cif = self._cif_path(run_dir, f"d{i}_q{j}")
+                if cif.exists():
+                    out[nm].append(str(cif))
+                    total += 1
+        print(f"[of3] refold_all: {total} refold(s) for {len(sets)} backbone(s) in ONE run -> {run_dir}")
+        return out

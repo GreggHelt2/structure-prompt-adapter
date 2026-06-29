@@ -142,11 +142,22 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
         print("[flywheel] no adherence prompt structure (set `eval.flywheel.prompt_struct` or "
               "`eval.prompt_pdb`) -> skipping adherence.")
 
+    # Stage 3b — BATCHED refold when the refolder supports it (one OF3 model-load for the whole matrix,
+    # vs one-per-backbone; ~halves eval wall-time at scale). Falls back to per-design refold otherwise.
+    refolds_by_name = None
+    if refolder is not None and hasattr(refolder, "refold_all"):
+        refolds_by_name = refolder.refold_all([ss for ss in seqsets if ss is not None])
+
     # Stage 4 — score each design (adherence if a prompt struct exists; designability if refolds exist).
     scores = []
     for d in designs:
         ss = seqsets_by_name.get(d.path.stem)
-        refolds = refolder.refold(ss) if (refolder is not None and ss is not None) else None
+        if refolds_by_name is not None:
+            refolds = refolds_by_name.get(d.path.stem)
+        elif refolder is not None and ss is not None:
+            refolds = refolder.refold(ss)
+        else:
+            refolds = None
         scores.append(score_design(d, prompt=prompt_struct, refolds=refolds, cfg=cfg))
 
     structs_by_name = {d.path.stem: d for d in designs}   # for the diversity leg in aggregate

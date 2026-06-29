@@ -112,3 +112,34 @@ def test_refold_raises_on_subprocess_failure(tmp_path, monkeypatch):
                         lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="boom"))
     with pytest.raises(RuntimeError, match="OpenFold3 refold failed"):
         _refolder(tmp_path).refold(_seqset())
+
+
+def test_refold_all_batches_into_one_run_and_groups_by_design(tmp_path, monkeypatch):
+    """refold_all does ONE subprocess for the whole matrix (the batching win) and groups refolds by name."""
+    calls = {"n": 0}
+
+    def fake_run(cmd, capture_output=True, text=True, env=None):
+        calls["n"] += 1
+        qjson = Path(cmd[cmd.index("--query-json") + 1])
+        out = Path(cmd[cmd.index("--output-dir") + 1])
+        for qid in json.loads(qjson.read_text())["queries"]:  # qids are d{i}_q{j}
+            d = out / qid / "seed_42"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{qid}_seed_42_sample_1_model.cif").write_text("data_fake\n")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+    monkeypatch.setattr("spa.eval.openfold3.subprocess.run", fake_run)
+
+    out = _refolder(tmp_path).refold_all([
+        _seqset(name="dA", sequences=["AAAA", "CCCC"]),
+        _seqset(name="dB", sequences=["DDDD"]),
+    ])
+    assert calls["n"] == 1                                  # ONE model-load for the whole matrix
+    assert set(out) == {"dA", "dB"}
+    assert len(out["dA"]) == 2 and len(out["dB"]) == 1      # grouped back by design
+    assert all(Path(p).exists() for paths in out.values() for p in paths)
+
+
+def test_refold_all_empty_no_subprocess(tmp_path, monkeypatch):
+    monkeypatch.setattr("spa.eval.openfold3.subprocess.run",
+                        lambda *a, **k: pytest.fail("refold_all must not run a subprocess when empty"))
+    assert _refolder(tmp_path).refold_all([_seqset(name="d0", sequences=[])]) == {"d0": []}
