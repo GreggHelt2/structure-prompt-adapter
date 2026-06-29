@@ -15,7 +15,8 @@ import torch
 from omegaconf import OmegaConf
 
 from spa.train.harness import (
-    _length_stratified_sampler, build_scheduler, load_checkpoint, save_checkpoint,
+    _length_stratified_sampler, build_scheduler, load_checkpoint, load_spa, save_checkpoint,
+    save_spa,
 )
 
 # --------------------------------------------------------------------------------------------------
@@ -99,6 +100,36 @@ def test_checkpoint_round_trip_full_state(tmp_path):
     assert "exp_avg" in fresh_opt.state[model.weight]         # Adam moments restored
     raw = torch.load(path, map_location="cpu", weights_only=False)
     assert raw["provenance"]["git_commit"] == "abc1234"       # provenance stamped
+
+
+def test_load_spa_accepts_export_and_full_state(tmp_path):
+    """load_spa must read BOTH checkpoint formats we write: the adapter-only `save_spa` export
+    (`spa_*_final.pt`) AND the full-state `save_checkpoint` snapshots (`spa_*_step*.pt` / `last.pt`),
+    extracting the adapter sub-dict from the latter — so an early snapshot can be evaluated directly
+    (eval.ckpt=...) with no manual extraction."""
+    torch.manual_seed(0)
+    model = torch.nn.Linear(4, 4)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    cfg = OmegaConf.create({"train": {"warmup_steps": 2, "max_steps": 10, "min_lr_ratio": 0.0},
+                            "variant": {"name": "C"}})
+    sched = build_scheduler(opt, cfg)
+    gen = torch.Generator().manual_seed(123)
+    loss = model(torch.randn(2, 4)).sum()
+    loss.backward()
+    opt.step()                                   # give the optimizer real moment state
+    w_before = model.weight.detach().clone()
+
+    export_path = os.path.join(tmp_path, "spa_C_final.pt")        # adapter-only (save_spa)
+    full_path = os.path.join(tmp_path, "spa_C_step1000.pt")       # full-state (save_checkpoint)
+    save_spa(model, export_path)
+    save_checkpoint(full_path, model, opt, sched, step=1, samples_seen=8, gen=gen, cfg=cfg,
+                    provenance={"git_commit": "deadbee"})
+
+    for path in (export_path, full_path):                        # both formats round-trip identically
+        fresh = torch.nn.Linear(4, 4)
+        torch.nn.init.normal_(fresh.weight)                      # perturb so a no-op "load" would fail
+        load_spa(fresh, path)
+        assert torch.equal(fresh.weight, w_before), f"load_spa failed for {os.path.basename(path)}"
 
 
 # --------------------------------------------------------------------------------------------------

@@ -190,7 +190,21 @@ def save_spa(adapter, path) -> None:
 
 
 def load_spa(adapter, path) -> None:
-    adapter.load_state_dict(torch.load(path, weights_only=True))
+    """Load SPA adapter weights from either checkpoint format we write:
+
+    - a :func:`save_spa` **adapter-only export** (``spa_<variant>_final.pt``) — the object *is* the
+      adapter ``state_dict``; or
+    - a :func:`save_checkpoint` **full-state checkpoint** (the numbered snapshots / ``last.pt``),
+      whose adapter weights live under the ``"adapter"`` key alongside optimizer/scheduler/RNG.
+
+    The full-state form is detected by the co-presence of ``"adapter"`` and ``"optimizer"`` (an
+    adapter ``state_dict`` never has an ``"optimizer"`` key), so an early snapshot can be passed
+    straight to eval (``eval.ckpt=...``) without manual extraction. Loaded to CPU first, then
+    ``load_state_dict`` cross-device-copies into the live (possibly on-GPU) adapter — mirroring
+    :func:`load_checkpoint`."""
+    obj = torch.load(path, map_location="cpu", weights_only=False)
+    is_full_state = isinstance(obj, dict) and "adapter" in obj and "optimizer" in obj
+    adapter.load_state_dict(obj["adapter"] if is_full_state else obj)
 
 
 def gather_provenance(cfg) -> dict:
