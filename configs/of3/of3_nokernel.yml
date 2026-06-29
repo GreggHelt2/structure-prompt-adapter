@@ -1,0 +1,26 @@
+# OpenFold3 runner-yaml — MSA-free, NO custom attention kernels (dev 05 Stage 3 / 07 F1.5.4).
+#
+# OF3's default `use_deepspeed_evo_attention=true` needs DeepSpeed + deepspeed4science ops, which are
+# NOT installed in spa-verify-of3; MSA-free runs fail in the attention kernel until disabled. Setting
+# the three kernel flags false falls back to stock-PyTorch attention (slower, but correct and fits the
+# A5000 at poster-scale monomer lengths). The kernel flags live under
+# model_update.custom.settings.memory.eval (merged via model_config.update(model_update.custom);
+# project_entry.py). For faster/larger runs later, install DeepSpeed or enable the triton kernels
+# (needed_repos/openfold-3/examples/example_runner_yamls/triton.yml).
+model_update:
+  presets:
+    - predict
+  custom:
+    settings:
+      memory:
+        eval:
+          use_deepspeed_evo_attention: false
+          use_triton_triangle_kernels: false
+          use_cueq_triangle_kernels: false
+
+# MSA-free + no templates (designed sequences have no meaningful MSA); single model seed -> the
+# output path is seed_42 (OF3Refolder reads {id}/seed_42/{id}_seed_42_sample_1_model.cif).
+experiment_settings:
+  use_msa_server: false
+  use_templates: false
+  seeds: [42]

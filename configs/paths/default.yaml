@@ -17,6 +17,11 @@ rfd3_ckpt: ${paths.models_root}/rfdiffusion3/rfd3_latest.ckpt
 # ESM3 loads from the HF cache by name (esm3_sm_open_v1), not a path here. CLSS (variant A only)
 # loads from HF too; leave clss_ckpt null unless overriding with a local file.
 clss_ckpt: null
+# OpenFold3 (dev 05 Stage 3 refold / designability). ckpt accepts an arbitrary path; the no-kernel
+# runner-yaml (F1.5.4: disables DeepSpeed/triton/cueq attention kernels -> stock attention) ships in
+# the repo. run_openfold itself is an entry point in the spa-verify-of3 env (eval.of3.conda_env).
+openfold3_ckpt: ${paths.models_root}/openfold3/of3-p2-155k.pt
+openfold3_runner_yaml: ${paths.project_root}/structure-prompt-adapter/configs/of3/of3_nokernel.yml
 
 # Caches and outputs.
 esm3_cache_dir: ${paths.data_root}/processed/esm3_cache
