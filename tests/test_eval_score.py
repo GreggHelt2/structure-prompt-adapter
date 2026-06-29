@@ -276,3 +276,114 @@ def test_aggregate_diversity_among_designable():
     assert len(summaries) == 1
     assert summaries[0].diversity_tm is not None
     assert 0.0 <= summaries[0].diversity_tm <= 1.0
+
+
+# --------------------------------------------------------------------------------------------------
+# 4. Motif satisfaction (Run-B hard⊕soft; dev 14 §3)
+# --------------------------------------------------------------------------------------------------
+
+_MOTIF = [8, 9, 10, 11, 12, 13]   # a 6-residue contiguous motif (0-based positional indices)
+
+
+def test_motif_rmsd_self_and_superposition_invariant():
+    from spa.eval.score import motif_rmsd
+
+    coords = _backbone()
+    source = _make_ca(coords)
+    assert motif_rmsd(source, source, _MOTIF) == pytest.approx(0.0, abs=1e-4)
+    # a rigid rotation+translation of the whole design leaves the motif RMSD ≈ 0 (Kabsch over the motif)
+    rotated = _make_ca(_rotate_translate(coords))
+    assert motif_rmsd(rotated, source, _MOTIF) == pytest.approx(0.0, abs=1e-4)
+
+
+def test_motif_rmsd_ignores_scaffold():
+    # Perturb the whole backbone, then restore ONLY the motif rows -> motif RMSD ≈ 0 even though the
+    # scaffold moved a lot. Proves the metric superposes/scores over the motif subset alone.
+    from spa.eval.score import motif_rmsd
+
+    coords = _backbone()
+    pert = _perturb(coords, sigma=2.0)
+    pert[_MOTIF] = coords[_MOTIF]
+    design = _make_ca(pert)
+    source = _make_ca(coords)
+    assert motif_rmsd(design, source, _MOTIF) == pytest.approx(0.0, abs=1e-4)
+
+
+def test_motif_rmsd_detects_motif_break():
+    # Perturb ONLY the motif rows -> motif RMSD clearly > 0 (the hard constraint was violated).
+    from spa.eval.score import motif_rmsd
+
+    coords = _backbone()
+    pert = coords.copy()
+    pert[_MOTIF] = _perturb(coords[_MOTIF], sigma=2.0, seed=3)
+    design = _make_ca(pert)
+    source = _make_ca(coords)
+    assert motif_rmsd(design, source, _MOTIF) > 0.5
+
+
+def test_motif_rmsd_raises_on_bad_indices():
+    from spa.eval.score import motif_rmsd
+
+    s = _make_ca(_backbone(n=24))
+    with pytest.raises(ValueError):
+        motif_rmsd(s, s, [])                              # empty
+    with pytest.raises(ValueError):
+        motif_rmsd(s, s, [8, 999])                        # out of range
+    with pytest.raises(ValueError):
+        motif_rmsd(s, s, [1, 2, 3], source_residues=[1, 2])  # count mismatch
+
+
+def test_score_design_with_motif():
+    from types import SimpleNamespace
+
+    from spa.eval.score import score_design
+
+    coords = _backbone()
+    design = SimpleNamespace(
+        atom_array=_make_ca(coords), path="x/spa_design_0.pdb",
+        condition="spa", lambda_scale=1.0, n_residues=len(coords),
+    )
+    source = _make_ca(coords)
+    refolds = [_make_ca(_perturb(coords, sigma=0.3))]
+    ds = score_design(design, prompt=source, refolds=refolds, motif=(source, _MOTIF))
+    # design == source over the motif -> design-side motif_rmsd ≈ 0, satisfied
+    assert ds.motif_rmsd == pytest.approx(0.0, abs=1e-4)
+    assert ds.motif_satisfied is True
+    # refold-side computed off the best refold (perturbed copy) -> finite, ≥ 0
+    assert ds.motif_rmsd_refold is not None and ds.motif_rmsd_refold >= 0.0
+    # non-motif fields still populated; a no-motif design leaves all three None
+    assert ds.scrmsd is not None and ds.tm_score is not None
+    ds_nomotif = score_design(design, prompt=source, refolds=refolds)
+    assert ds_nomotif.motif_rmsd is None and ds_nomotif.motif_satisfied is None
+    assert ds_nomotif.motif_rmsd_refold is None
+
+
+def test_aggregate_and_delta_motif():
+    # Two conditions, both with the motif pinned (motif_rmsd ~0) -> satisfied rate 1.0 and
+    # d_motif_rmsd_mean ≈ 0 (the hard pin is SPA-independent — the headline claim).
+    from spa.eval.score import DesignScore, aggregate, delta_vs_baseline
+
+    def mk(name, cond, lam, mrmsd):
+        return DesignScore(
+            name=name, condition=cond, lambda_scale=lam, n_residues=50,
+            tm_score=0.3, scrmsd=1.0, designable=True,
+            motif_rmsd=mrmsd, motif_satisfied=bool(mrmsd < 1.0),
+        )
+
+    scores = [
+        mk("b0", "baseline", 0.0, 0.05), mk("b1", "baseline", 0.0, 0.07),
+        mk("s0", "spa", 1.0, 0.06), mk("s1", "spa", 1.0, 0.08),
+    ]
+    summaries = aggregate(scores)
+    by = {(s.condition, s.lambda_scale): s for s in summaries}
+    assert by[("baseline", 0.0)].motif_satisfied_rate == pytest.approx(1.0)
+    assert by[("baseline", 0.0)].motif_rmsd.mean == pytest.approx(0.06)
+    assert by[("spa", 1.0)].motif_rmsd.mean == pytest.approx(0.07)
+
+    deltas = delta_vs_baseline(summaries)
+    assert deltas[0].d_motif_rmsd_mean == pytest.approx(0.01, abs=1e-6)  # 0.07 - 0.06, ≈ 0
+
+    # A purely non-motif aggregate leaves the motif rollups empty/None (no regression).
+    plain = aggregate(_synthetic_scores())
+    base = {(s.condition, s.lambda_scale): s for s in plain}[("baseline", 0.0)]
+    assert base.motif_satisfied_rate is None and base.motif_rmsd.n == 0

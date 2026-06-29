@@ -7,7 +7,7 @@ the comparison numbers the poster reports: **designability** (best-of-K self-con
 **prompt adherence** (does an SPA design honor its structural prompt's fold), aggregated per
 ``(condition, λ)`` with the headline **Δ(SPA − baseline)**.
 
-Two metric families (dev ``05`` §3):
+Three metric families (the third only for Run-B hard⊕soft motif evals — dev ``14``):
 
 - **Adherence (no OF3 needed)** — the SPA-vs-baseline headline. Align a design to its prompt's source
   structure and report a length-independent **TM-score** (primary; ``tmtools.tm_align`` — robust to
@@ -20,6 +20,12 @@ Two metric families (dev ``05`` §3):
   input** (an in-memory ``AtomArray``, a path, or a :class:`Refolder` that turns a ``SequenceSet``
   into refold structures) — OF3 itself is **not** implemented here (dev ``05`` Stage 3 runs in a
   separate env); a stand-in refold validates the math in the smoke test.
+- **Motif satisfaction (Run-B hard⊕soft only; dev ``14`` §3)** — when a native motif is scaffolded
+  (RFD3 pins it at fixed coords), the Cα **motif-RMSD** over just the motif residues vs the motif's
+  source. Two readings: *design-side* (RFD3 backbone vs source — ≈0 by construction, a sanity check the
+  pin held, and the headline "hard satisfied, equal across conditions" number) and *refold-side* (the
+  OF3 refold vs source — does the designed sequence still realize the motif geometry?). ``None`` for any
+  design with no motif supplied, so non-motif evals are unaffected.
 
 Plus two best-effort population checks (dev ``05`` §3): **diversity** (pairwise TM among a condition's
 designable designs — does SPA collapse to one fold or span the prompt's topology?) and **novelty**
@@ -43,11 +49,12 @@ from typing import Any, Protocol, runtime_checkable
 # --------------------------------------------------------------------------------------------------
 
 DEFAULTS = {
-    "scrmsd_cutoff": 2.0,   # Å — best-of-K Cα scRMSD designability threshold (dev 05 §3 / 06 §6)
-    "plddt_cutoff": 80.0,   # OF3 pLDDT designability gate (applied only when a pLDDT is supplied)
-    "tm_norm": "prompt",    # primary TM normalization for adherence: prompt | design | max
-    "diversity": True,      # compute pairwise-TM diversity among the designable set
-    "novelty": False,       # novelty-vs-PDB (Foldseek) — stub; raises NotImplemented if requested
+    "scrmsd_cutoff": 2.0,       # Å — best-of-K Cα scRMSD designability threshold (dev 05 §3 / 06 §6)
+    "plddt_cutoff": 80.0,       # OF3 pLDDT designability gate (applied only when a pLDDT is supplied)
+    "tm_norm": "prompt",        # primary TM normalization for adherence: prompt | design | max
+    "diversity": True,          # compute pairwise-TM diversity among the designable set
+    "novelty": False,           # novelty-vs-PDB (Foldseek) — stub; raises NotImplemented if requested
+    "motif_rmsd_cutoff": 1.0,   # Å — Cα RMSD over the motif residues; motif_satisfied iff below (dev 14 §3)
 }
 
 
@@ -60,6 +67,7 @@ class ScoreConfig:
     tm_norm: str = DEFAULTS["tm_norm"]
     diversity: bool = DEFAULTS["diversity"]
     novelty: bool = DEFAULTS["novelty"]
+    motif_rmsd_cutoff: float = DEFAULTS["motif_rmsd_cutoff"]
 
 
 def score_config(cfg=None) -> ScoreConfig:
@@ -80,6 +88,7 @@ def score_config(cfg=None) -> ScoreConfig:
         tm_norm=str(sc.get("tm_norm", DEFAULTS["tm_norm"])),
         diversity=bool(sc.get("diversity", DEFAULTS["diversity"])),
         novelty=bool(sc.get("novelty", DEFAULTS["novelty"])),
+        motif_rmsd_cutoff=float(sc.get("motif_rmsd_cutoff", DEFAULTS["motif_rmsd_cutoff"])),
     )
 
 
@@ -150,6 +159,10 @@ class DesignScore:
     best_refold_idx: int | None = None
     plddt: float | None = None
     designable: bool | None = None
+    # hard-motif satisfaction (Run-B hard⊕soft; dev 14 §3-§4) — all None when no motif was supplied
+    motif_rmsd: float | None = None         # design-side: design backbone vs motif source, over the motif residues
+    motif_rmsd_refold: float | None = None  # refold-side: best OF3 refold vs motif source (motif survival)
+    motif_satisfied: bool | None = None     # design-side motif_rmsd < motif_rmsd_cutoff (the hard pin held)
 
 
 @dataclass
@@ -175,6 +188,9 @@ class ConditionSummary:
     tm: Distribution                        # adherence TM-score distribution
     prompt_rmsd: Distribution               # adherence Cα-RMSD distribution
     scrmsd: Distribution                    # best-of-K scRMSD distribution
+    motif_rmsd: Distribution = field(default_factory=lambda: Distribution(n=0))         # design-side motif Cα-RMSD (≈0 if the hard pin held; dev 14)
+    motif_rmsd_refold: Distribution = field(default_factory=lambda: Distribution(n=0))  # refold-side motif Cα-RMSD (motif survival through OF3)
+    motif_satisfied_rate: float | None = None  # fraction with design-side motif_rmsd < cutoff (None if no motif scored)
     diversity_tm: float | None = None       # mean pairwise TM among the designable set (lower = more diverse)
     novelty: float | None = None            # stubbed (Foldseek) — always None here
 
@@ -188,6 +204,7 @@ class DeltaSummary:
     d_success_rate: float | None
     d_tm_mean: float | None
     d_prompt_rmsd_mean: float | None
+    d_motif_rmsd_mean: float | None         # Δ design-side motif-RMSD — expect ≈0 (the hard pin is SPA-independent)
     spa_success_rate: float | None
     baseline_success_rate: float | None
     spa_tm_mean: float | None
@@ -313,6 +330,41 @@ def adherence(design_struct, prompt_struct, *, tm_norm: str = "prompt") -> Adher
 
 
 # --------------------------------------------------------------------------------------------------
+# Motif satisfaction — Cα RMSD over the motif residues only (Run-B hard⊕soft; dev 14 §3)
+# --------------------------------------------------------------------------------------------------
+
+
+def motif_rmsd(design_struct, motif_source, motif_residues, *, source_residues=None) -> float:
+    """Cα Kabsch RMSD (Å) over the **motif residues only** — "is the hard constraint satisfied?" (dev ``14`` §3).
+
+    Subset both structures to the motif residues' Cα, Kabsch-superpose **over that subset alone**, and
+    return its RMSD — so the (diffused) scaffold is irrelevant to the number. ``motif_residues`` are
+    **0-based positional indices** into the per-residue Cα array (residues in chain order) of
+    ``design_struct``; ``source_residues`` indexes ``motif_source`` and defaults to ``motif_residues``
+    (the design-aligned self-prompt case, where design and motif source share length + indexing —
+    dev ``14`` §0). Used two ways: *design-side* (``design_struct`` = the RFD3 backbone → ≈0, a sanity
+    check the pin held) and *refold-side* (``design_struct`` = the OF3 refold → does the designed
+    sequence still realize the motif geometry?).
+
+    Raises ``ValueError`` on an empty/mismatched/out-of-range index set (no silent wrong answer).
+    """
+    di = list(motif_residues)
+    si = list(motif_residues if source_residues is None else source_residues)
+    if not di:
+        raise ValueError("motif_rmsd: empty motif_residues")
+    if len(di) != len(si):
+        raise ValueError(f"motif_rmsd: index-count mismatch ({len(di)} design vs {len(si)} source)")
+    d = _ca_array(design_struct)
+    s = _ca_array(motif_source)
+    for arr, idx, who in ((d, di, "design"), (s, si, "source")):
+        if min(idx) < 0 or max(idx) >= len(arr):
+            raise ValueError(
+                f"motif_rmsd: {who} motif index out of range (n={len(arr)}, idx∈[{min(idx)},{max(idx)}])"
+            )
+    return ca_rmsd(s[si], d[di])
+
+
+# --------------------------------------------------------------------------------------------------
 # Designability — best-of-K self-consistency scRMSD (dev 05 §3); refold is a pluggable input
 # --------------------------------------------------------------------------------------------------
 
@@ -383,17 +435,22 @@ def _design_meta(design) -> tuple[str, str, float, int]:
     return str(name), str(condition), lam, int(n_res)
 
 
-def score_design(design, *, prompt=None, refolds=None, plddt=None, cfg=None, score_cfg=None) -> DesignScore:
-    """Score one design: adherence (if ``prompt`` given) + designability (if ``refolds`` given).
+def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, cfg=None, score_cfg=None) -> DesignScore:
+    """Score one design: adherence (if ``prompt``) + designability (if ``refolds``) + motif (if ``motif``).
 
     Args:
         design: a :class:`spa.eval.generate.Design` (uses ``.atom_array``), an ``AtomArray``, or a PDB path.
         prompt: the prompt's source structure (AtomArray / path) for adherence, or ``None`` to skip.
         refolds: iterable of OF3 refold structures for designability (best-of-K), or ``None`` to skip.
         plddt: optional OF3 pLDDT for the best refold (gates designability when supplied).
+        motif: ``(source_struct, residues)`` (or ``{"source", "residues"}``) for the Run-B hard⊕soft
+            motif-RMSD (dev ``14`` §3), or ``None`` (the default — non-motif evals are untouched).
+            ``residues`` are 0-based positional Cα indices; see :func:`motif_rmsd`. Fills design-side
+            ``motif_rmsd`` + ``motif_satisfied``, and ``motif_rmsd_refold`` when ``refolds`` is also given.
         cfg / score_cfg: thresholds (a Hydra cfg with ``eval.score`` or a :class:`ScoreConfig`).
     """
     sc = score_cfg if isinstance(score_cfg, ScoreConfig) else score_config(cfg)
+    refolds = list(refolds) if refolds is not None else None  # may be indexed twice (scRMSD + refold-side motif)
     name, condition, lam, n_res = _design_meta(design)
     ds = DesignScore(name=name, condition=condition, lambda_scale=lam, n_residues=n_res)
 
@@ -412,6 +469,16 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, cfg=None, sco
         ds.designable = is_designable(
             res.scrmsd, plddt, scrmsd_cutoff=sc.scrmsd_cutoff, plddt_cutoff=sc.plddt_cutoff
         )
+
+    if motif is not None:
+        source, residues = (motif["source"], motif["residues"]) if isinstance(motif, dict) else motif
+        ds.motif_rmsd = motif_rmsd(design, source, residues)
+        ds.motif_satisfied = bool(ds.motif_rmsd < sc.motif_rmsd_cutoff)
+        if refolds is not None and ds.best_refold_idx is not None and ds.best_refold_idx >= 0:
+            try:  # the best refold may differ in length from the motif source (rare) -> leave None
+                ds.motif_rmsd_refold = motif_rmsd(refolds[ds.best_refold_idx], source, residues)
+            except Exception:
+                ds.motif_rmsd_refold = None
     return ds
 
 
@@ -493,6 +560,12 @@ def aggregate(scores, *, structs_by_name=None, cfg=None, score_cfg=None) -> list
             if len(designable_structs) >= 2:
                 diversity_tm = pairwise_tm_diversity(designable_structs)
 
+        motif_scored = [s for s in items if s.motif_satisfied is not None]
+        motif_satisfied_rate = (
+            sum(1 for s in motif_scored if s.motif_satisfied) / len(motif_scored)
+            if motif_scored else None
+        )
+
         summaries.append(ConditionSummary(
             condition=condition,
             lambda_scale=lam,
@@ -502,6 +575,9 @@ def aggregate(scores, *, structs_by_name=None, cfg=None, score_cfg=None) -> list
             tm=_distribution([s.tm_score for s in items]),
             prompt_rmsd=_distribution([s.prompt_rmsd for s in items]),
             scrmsd=_distribution([s.scrmsd for s in items]),
+            motif_rmsd=_distribution([s.motif_rmsd for s in items]),
+            motif_rmsd_refold=_distribution([s.motif_rmsd_refold for s in items]),
+            motif_satisfied_rate=motif_satisfied_rate,
             diversity_tm=diversity_tm,
             novelty=None,
         ))
@@ -532,6 +608,7 @@ def delta_vs_baseline(summaries, *, baseline_condition: str = "baseline") -> lis
             d_success_rate=_sub(s.success_rate, base.success_rate),
             d_tm_mean=_sub(s.tm.mean, base.tm.mean),
             d_prompt_rmsd_mean=_sub(s.prompt_rmsd.mean, base.prompt_rmsd.mean),
+            d_motif_rmsd_mean=_sub(s.motif_rmsd.mean, base.motif_rmsd.mean),
             spa_success_rate=s.success_rate,
             baseline_success_rate=base.success_rate,
             spa_tm_mean=s.tm.mean,
