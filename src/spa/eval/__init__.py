@@ -10,6 +10,7 @@ from the RFD3 AtomArray).
 
 from .flywheel import run_flywheel
 from .generate import Design, generate
+from .ladder import LadderPoint, run_ladder
 from .openfold3 import OF3Refolder
 from .proteinmpnn import SequenceSet, inverse_fold, run_proteinmpnn
 from .score import (
@@ -41,6 +42,9 @@ __all__ = [
     "OF3Refolder",
     # flywheel driver (orchestration)
     "run_flywheel",
+    # checkpoint-step adherence ladder (dev 13)
+    "run_ladder",
+    "LadderPoint",
     # scoring (Stage 4)
     "Adherence",
     "ConditionSummary",
