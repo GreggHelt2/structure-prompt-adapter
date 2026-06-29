@@ -177,6 +177,9 @@ def _print_table(points, prompt_struct) -> dict:
         if pt.label == "final" and abs(pt.lambda_scale - 1.0) < 1e-9:
             anchor = {"final_lambda1_tm": pt.tm_mean}
     if anchor:
+        # The step-30k λ=1 value, for an equivalence check vs a same-prompt driver/known ref. (The ref
+        # is PER PROMPT — e.g. A0A7S1B8G4 ≈ 0.373, dev 08 §6 — so we print the value, not a hardcoded
+        # number that would be meaningless for other prompts.)
         print(f"\n[anchor] step-30k λ=1 TM={anchor['final_lambda1_tm']:.3f} "
-              f"(driver ref ≈0.373, dev 08 §6 — should match within sampler noise)")
+              f"(compare to a same-prompt driver/known ref for the equivalence check)")
     return anchor
