@@ -148,7 +148,17 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
     if refolder is not None and hasattr(refolder, "refold_all"):
         refolds_by_name = refolder.refold_all([ss for ss in seqsets if ss is not None])
 
-    # Stage 4 — score each design (adherence if a prompt struct exists; designability if refolds exist).
+    # Run-B hard⊕soft: if a native motif was scaffolded, score motif-RMSD vs its source over the motif
+    # residues (dev 14 §3). `(source_pdb, motif_residues)` — derived from the same eval.motif the generator
+    # used, so the indices match the design frame. None ⇒ no motif scored (unconditional evals unchanged).
+    motif_score = None
+    if cfg.eval.get("motif"):
+        from .generate import _parse_contig_motif_indices
+        m = cfg.eval.motif
+        motif_score = (str(m["source_pdb"]), _parse_contig_motif_indices(str(m["contig"])))
+
+    # Stage 4 — score each design (adherence if a prompt struct exists; designability if refolds exist;
+    # motif-RMSD if a motif was scaffolded).
     scores = []
     for d in designs:
         ss = seqsets_by_name.get(d.path.stem)
@@ -158,7 +168,7 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
             refolds = refolder.refold(ss)
         else:
             refolds = None
-        scores.append(score_design(d, prompt=prompt_struct, refolds=refolds, cfg=cfg))
+        scores.append(score_design(d, prompt=prompt_struct, refolds=refolds, motif=motif_score, cfg=cfg))
 
     structs_by_name = {d.path.stem: d for d in designs}   # for the diversity leg in aggregate
     summaries = aggregate(scores, structs_by_name=structs_by_name, cfg=cfg)
