@@ -8,6 +8,8 @@ length: 100                # design length (residues) for unconditional generati
 specification: null        # optional RFD3 DesignInputSpecification dict (augments/overrides `length`)
 num_timesteps: null        # RFD3 sampler steps (null -> engine default 200; lower = faster/cheaper)
 seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
+ladder: null               # checkpoint-step ADHERENCE LADDER (scripts/eval/ladder_sweep.py, dev 13): list of
+                           #   snapshot paths to sweep (adherence vs training step). null -> not a ladder run.
 
 # Prompt for condition=spa (the same structure-only ESM3 tap training used). Provide ONE:
 prompt_pdb: null           # a structure file -> spa.prompt.esm3_prompt -> [N,1536] (ESM3 loaded once, then freed)
