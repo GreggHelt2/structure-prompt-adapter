@@ -177,6 +177,82 @@ def _prompt_id(cfg) -> str:
 
 
 # --------------------------------------------------------------------------------------------------
+# Native motif (hard conditioning) — Run-B hard⊕soft (dev 14 §1); absent ⇒ unconditional, unchanged
+# --------------------------------------------------------------------------------------------------
+
+
+def _parse_contig_motif_indices(contig: str) -> list[int]:
+    """Design-frame 0-based indices of the motif residues in an RFD3 contig (dev ``14`` §1).
+
+    Grammar (the RFD3 dialect-2 subset we use; e.g. ``"59,A60-71,79"`` or 1CTT
+    ``"74,A102,1,A104,24,A129,2,A132,75"``): comma-separated tokens walked left→right over the design
+    sequence — a **bare integer** is a diffused scaffold gap of that many residues; a token starting
+    with a **chain letter** (``A102`` or ``A60-71``) is a fixed motif segment pulled from the input.
+    Returns the running design-position indices the motif occupies — what both the SPA prompt-mask (§2)
+    and ``motif_rmsd`` (`score.py`) consume. Rejects variable-length (``min-max``) gaps: the design
+    length must be fixed for the indices (and the design-aligned self-prompt) to be well-defined.
+    """
+    import re
+
+    motif: list[int] = []
+    cursor = 0
+    for tok in (t.strip() for t in str(contig).split(",")):
+        if not tok:
+            continue
+        if tok[0].isalpha():                                   # motif segment from the input chain
+            m = re.fullmatch(r"[A-Za-z]+(\d+)(?:-(\d+))?", tok)
+            if not m:
+                raise ValueError(f"contig: cannot parse motif token {tok!r}")
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else start
+            n = end - start + 1
+            if n < 1:
+                raise ValueError(f"contig: bad motif range {tok!r} (end < start)")
+            motif.extend(range(cursor, cursor + n))
+            cursor += n
+        elif tok.isdigit():                                    # fixed-length diffused scaffold gap
+            cursor += int(tok)
+        else:                                                  # variable 'min-max' gap or junk
+            raise ValueError(
+                f"contig: token {tok!r} unsupported for motif eval — use fixed-int gaps + chain-prefixed "
+                f"motif segments (no variable 'min-max' gaps; dev 14 §1)."
+            )
+    if not motif:
+        raise ValueError(f"contig {contig!r} has no motif segments")
+    return motif
+
+
+def build_motif(cfg):
+    """Build the native motif spec + its design-frame indices for the Run-B hard⊕soft eval (dev ``14`` §1).
+
+    Reads ``eval.motif`` (``source_pdb``, ``contig``, optional ``fixed_atoms``); returns
+    ``(DesignInputSpecification, motif_residues)``, or ``(None, None)`` when no motif is configured — the
+    default, so the unconditional path stays byte-identical. The spec is what ``engine.run(inputs=…)``
+    consumes directly (a ``DesignInputSpecification``; the engine's ``diffusion_batch_size`` still yields
+    K designs for it). ``motif_residues`` are the 0-based design indices the SPA prompt-mask (§2) and
+    ``motif_rmsd`` use. **Length comes from the contig** — ``eval.length`` is ignored when a motif is
+    active (warned), per ``_canonicalize_inputs`` not merging ``specification_overrides`` onto a spec.
+    """
+    m = cfg.eval.get("motif")
+    if not m:
+        return None, None
+    from rfd3.inference.input_parsing import DesignInputSpecification
+
+    contig = str(m["contig"])
+    residues = _parse_contig_motif_indices(contig)
+    spec = DesignInputSpecification(
+        input=str(m["source_pdb"]),
+        contig=contig,
+        select_fixed_atoms=m.get("fixed_atoms", True),
+    )
+    if cfg.eval.get("length") is not None:
+        print("[generate] motif active -> design length is set by eval.motif.contig; eval.length ignored.")
+    print(f"[generate] motif: {len(residues)} fixed residues at design indices "
+          f"[{min(residues)}..{max(residues)}] from {m['source_pdb']} (contig {contig!r})")
+    return spec, residues
+
+
+# --------------------------------------------------------------------------------------------------
 # Output (F1.5.2 CIF→PDB, done in-memory from the RFD3 AtomArray)
 # --------------------------------------------------------------------------------------------------
 
@@ -274,9 +350,15 @@ def _normalize_lambdas(value) -> list[float]:
     return [float(v) for v in value]
 
 
-def _run_once(engine) -> list:
-    """Run the full RFD3 sampler once and return the K ``RFD3Output`` (one per diffusion-batch idx)."""
-    outputs = engine.run(inputs=None, out_dir=None)  # {example_id: [RFD3Output, ...]}
+def _run_once(engine, spec=None) -> list:
+    """Run the full RFD3 sampler once and return the K ``RFD3Output`` (one per diffusion-batch idx).
+
+    ``spec`` is an optional native :class:`DesignInputSpecification` (the Run-B hard⊕soft motif, dev
+    ``14`` §1); ``None`` ⇒ today's unconditional design (``inputs=None``). Either way the engine's
+    ``diffusion_batch_size`` yields K designs for the single (motif or empty) spec, returned under one
+    ``example_id`` — so the ``next(iter(...))`` below is correct in both modes.
+    """
+    outputs = engine.run(inputs=spec, out_dir=None)  # {example_id: [RFD3Output, ...]}
     if not outputs:
         raise RuntimeError("engine.run produced no outputs (empty design specification).")
     return next(iter(outputs.values()))
@@ -320,26 +402,42 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     adapter.eval()
     adapter_dtype = next(adapter.parameters()).dtype
 
+    # Native motif (hard) for the Run-B hard⊕soft eval — applied to BOTH conditions (baseline = motif-only
+    # RFD3; spa = motif ⊕ SPA). None ⇒ unconditional (today's path, unchanged). dev 14 §1.
+    motif_spec, motif_residues = build_motif(cfg)
+
     # Resolve + batch the prompt to [K, N, c_kv] once (constant across the diffusion batch) — only if
     # any 'spa' run is requested.
     prompt_batched = None
+    prompt_mask = None
     if "spa" in conditions:
         p = resolve_prompt(cfg, device)              # [N, c_kv]
         prompt_batched = p[None].expand(K, -1, -1).to(device=device, dtype=adapter_dtype).contiguous()
+        if motif_residues is not None:               # non-overlap: SPA attends to the scaffold rows only (§2)
+            N = prompt_batched.shape[1]
+            bad = [i for i in motif_residues if i >= N]
+            if bad:
+                raise ValueError(
+                    f"motif residue index ≥ prompt length {N}: {bad} — the SPA prompt and the contig motif "
+                    f"must be design-aligned (same length; dev 14 §0/§2)."
+                )
+            prompt_mask = torch.zeros(K, N, dtype=torch.bool, device=device)
+            prompt_mask[:, motif_residues] = True
+            print(f"[generate] SPA prompt-mask: {len(motif_residues)} motif rows masked of N={N} (non-overlap).")
 
     designs: list[Design] = []
     for condition in conditions:
         run_lambdas = lambdas if condition == "spa" else [0.0]  # baseline ignores λ (clear_prompt)
         for lam in run_lambdas:
             if condition == "baseline":
-                adapter.clear_prompt()               # wrappers return base only == vanilla RFD3
+                adapter.clear_prompt()               # wrappers return base only == vanilla RFD3 (± native motif)
             else:
-                adapter.set_prompt(prompt_batched)
+                adapter.set_prompt(prompt_batched, key_padding_mask=prompt_mask)
                 adapter.set_scale(lam)
 
             _seed_all(seed)                          # paired noise + identity-gate determinism
             with torch.no_grad():
-                output_list = _run_once(engine)
+                output_list = _run_once(engine, motif_spec)
 
             lam_label = 0.0 if condition == "baseline" else float(lam)
             for idx, rfd3_out in enumerate(output_list):
