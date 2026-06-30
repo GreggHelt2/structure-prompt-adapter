@@ -1,0 +1,32 @@
+# Curated-15 eval manifest — the pinned big-n eval set (dev 12 §3; pinned 2026-06-30).
+#
+# 15 held-out monomer fold prompts from the pinned test split (v1_seed0_8-1-1_lenstrat) — clean by
+# construction (no leakage), ESM3 prompts already in esm3_cache.tar. Deliberately β-heavy vs the pool
+# (6 β / 4 α-β / 3 α / 2 irregular) because β is RFD3's against-the-grain case + where variants may
+# separate. The 3 anchors (#9, #10, #15) already characterized in docs/results/02 §2-§5 -> big-n EXTENDS
+# known points. All ≤256 res (A5000-runnable as fallback; H100 for the matrix).
+#
+# Used by both big-n jobs: (Job B / breadth) each entry = the SPA soft-conditioning prompt, unconditional;
+# (Job A / H5) each entry ALSO yields a carved self-motif (hard) — motif contigs TODO via DSSP carving
+# (one helix/strand fragment per prompt; all-β -> strand-pair, all-α -> helix, α/β -> helix+strand).
+# pdb = <pdb_dir>/AF-<id>-F1-model_v4_esmfold_v1.pdb ; prompt also available cached (esm3_cache.tar).
+
+split_id: v1_seed0_8-1-1_lenstrat
+pdb_pattern: "AF-{id}-F1-model_v4_esmfold_v1.pdb"
+
+prompts:
+  - {id: A0A1X7NTP0, len: 52,  fold: all-a,     tags: [smallest]}
+  - {id: A0A6A0D1E8, len: 87,  fold: all-b,     tags: [protect-beta]}
+  - {id: A0A3P5VTL4, len: 88,  fold: all-b,     tags: [protect-beta]}
+  - {id: A0A090ME36, len: 90,  fold: all-b,     tags: [protect-beta]}
+  - {id: A0A7S1B8G4, len: 105, fold: all-b,     tags: [protect-beta, anchor]}   # §2 all-β sweep
+  - {id: A0A820JRM2, len: 110, fold: irregular, tags: [anchor]}                 # ladder, dTM +0.49
+  - {id: A0A6P1U7L6, len: 121, fold: all-b,     tags: [protect-beta]}
+  - {id: A0A7S3EB45, len: 125, fold: all-b,     tags: [protect-beta]}
+  - {id: A0A522W419, len: 150, fold: a-b,       tags: [anchor]}                 # §2/§4/§5 workhorse
+  - {id: A0A2X2KHU0, len: 151, fold: all-a,     tags: []}
+  - {id: R7VVY2,     len: 160, fold: irregular, tags: []}
+  - {id: A0A6J8EPQ1, len: 181, fold: a-b,       tags: []}
+  - {id: A0A7C9GW19, len: 206, fold: all-a,     tags: []}
+  - {id: H1SDK8,     len: 210, fold: a-b,       tags: []}
+  - {id: A0A1X0IID6, len: 247, fold: a-b,       tags: []}

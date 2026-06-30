@@ -1,0 +1,28 @@
+# OpenFold3 runner-yaml — MSA-free, TRITON attention kernels (cloud H100 big-n eval; dev 05 / 07 F1.5.4).
+#
+# The CLOUD counterpart to of3_nokernel.yml. The no-kernel yaml falls back to stock-PyTorch attention
+# (correct but slow; chosen locally only because DeepSpeed's evoformer_attn op wasn't installed — F1.5.4,
+# NOT a perf choice). On the H100 image we enable the TRITON triangle kernels instead:
+#   - triton ships INSIDE the cu12x torch wheel (torch 2.5.1+cu124 bundles triton 3.1.0) -> no extra
+#     pip install, no torch bump, no DeepSpeed/cutlass JIT build (OF3's most common install failure).
+#   - Hopper (sm_90) compatible; keeps torch-2.5.1 parity with the SPA stack.
+# OF3's base config defaults use_deepspeed_evo_attention=True on CUDA, so we MUST explicitly disable it
+# (it would fail without deepspeed). The three kernel flags are mutually exclusive (OF3 attention.py).
+# ⚠️ Upstream has not validated ANY kernel on H100 ("to test") -> smoke-run a short fold before the matrix.
+model_update:
+  presets:
+    - predict
+  custom:
+    settings:
+      memory:
+        eval:
+          use_triton_triangle_kernels: true
+          use_deepspeed_evo_attention: false   # MUST disable: it's the CUDA default (would fail w/o deepspeed)
+          use_cueq_triangle_kernels: false
+
+# MSA-free + no templates (designed sequences have no meaningful MSA); single model seed -> output path
+# seed_42 (OF3Refolder reads {id}/seed_42/{id}_seed_42_sample_1_model.cif), identical to of3_nokernel.yml.
+experiment_settings:
+  use_msa_server: false
+  use_templates: false
+  seeds: [42]
