@@ -62,6 +62,45 @@ def test_lambda_scales_output_linearly():
     assert torch.allclose(spa(query, k, v), 2.0 * base, atol=1e-5)  # linear in λ
 
 
+def test_lambda_profile_region_specific_steering():
+    # Per-residue λ profile (the three-way A/B/C masking probe): a [I] weight scales the SPA term
+    # per design residue. profile=None -> uniform scalar λ; weight 0 -> state C (no steering on
+    # those rows); weight 1 -> state B (full); effective strength = lambda_scale * profile[i].
+    promptkv, spa = _make()
+    torch.nn.init.xavier_uniform_(spa.to_out.weight)
+    query = torch.randn(D, I, C_QUERY)
+    k, v = promptkv(torch.randn(D, M, C_KV))
+
+    spa.set_scale(2.0)
+    uniform = spa(query, k, v)                                   # profile None -> scalar λ
+    spa.set_profile(torch.ones(I))
+    assert torch.allclose(spa(query, k, v), uniform, atol=1e-5)  # all-ones == uniform
+
+    # state C on the second half: those rows' term must be exactly zero, the rest unchanged.
+    half = I // 2
+    prof = torch.ones(I); prof[half:] = 0.0
+    spa.set_profile(prof)
+    out = spa(query, k, v)
+    assert torch.count_nonzero(out[:, half:, :]) == 0                  # state C -> silent
+    assert torch.allclose(out[:, :half, :], uniform[:, :half, :], atol=1e-5)  # state B -> full
+
+    spa.set_profile(None)                                        # restores uniform
+    assert torch.allclose(spa(query, k, v), uniform, atol=1e-5)
+
+
+def test_lambda_profile_length_mismatch_raises():
+    promptkv, spa = _make()
+    torch.nn.init.xavier_uniform_(spa.to_out.weight)
+    query = torch.randn(D, I, C_QUERY)
+    k, v = promptkv(torch.randn(D, M, C_KV))
+    spa.set_profile(torch.ones(I + 1))                           # wrong length
+    try:
+        spa(query, k, v)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for lambda_profile length != query length")
+
+
 def test_key_padding_mask_excludes_positions():
     # Masking a prompt token must change the attended output (that token no longer participates).
     promptkv, spa = _make()

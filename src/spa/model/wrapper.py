@@ -93,7 +93,8 @@ class SPAAdapter(nn.Module):
         ``set_prompt(prompt)`` once per design (before RFD3's forward) to project + stash K/V;
         ``set_null_prompt(D)`` for CFG zero-prompt dropout (the learned null token e∅, dev ``11`` §6);
         ``clear_prompt()`` for the wrapped-no-prompt baseline (λ=0 / no prompt available);
-        ``set_scale(λ)`` to tune prompt strength at inference.
+        ``set_scale(λ)`` to tune prompt strength at inference;
+        ``set_profile(w)`` for optional per-residue region-specific steering (``None`` = uniform).
     """
 
     def __init__(self, projector: nn.Module, prompt_kv: nn.Module,
@@ -140,3 +141,10 @@ class SPAAdapter(nn.Module):
         """Set the inference scale λ on every block (0 ⇒ unconditional == vanilla RFD3)."""
         for ca in self.cross_attn:
             ca.set_scale(value)
+
+    def set_profile(self, weights: torch.Tensor | None) -> None:
+        """Set a per-residue λ weight ``[I]`` on every block (region-specific steering), or ``None``
+        to restore uniform scalar λ. State B=1, state C=0, feathering=a 0→1 ramp (dev: the three-way
+        A/B/C masking probe). Effective strength at residue ``i`` is ``set_scale(λ) * weights[i]``."""
+        for ca in self.cross_attn:
+            ca.set_profile(weights)
