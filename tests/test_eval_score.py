@@ -387,3 +387,48 @@ def test_aggregate_and_delta_motif():
     plain = aggregate(_synthetic_scores())
     base = {(s.condition, s.lambda_scale): s for s in plain}[("baseline", 0.0)]
     assert base.motif_satisfied_rate is None and base.motif_rmsd.n == 0
+
+
+def test_source_positions_and_3tuple_non_self_aligned():
+    """review #1: a non-self-aligned source (author resids ≠ design positions) is scored against the RIGHT
+    residues via source_positions, and the old design-frame default would be wrong."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    from biotite.structure import Atom, array
+
+    from spa.eval.score import motif_rmsd, score_design, source_positions
+
+    coords = _backbone(n=30)
+    design = _make_ca(coords)                       # res_ids 1..30, positions 0..29
+
+    # source: SAME chain "A" but author resids 100..129, and its coords are deliberately scrambled so that
+    # design-frame indexing ≠ author-resid indexing. The motif lives at design idx [10..14] ↔ author resids
+    # [110..114], which sit at source POSITIONS [10..14]; we place the matching coords there and perturb the
+    # design-frame positions so the buggy (design-index-as-source-index) path is provably wrong.
+    motif_design = [10, 11, 12, 13, 14]             # design-frame positions (driven by the contig gaps)
+    motif_srcpos = [2, 3, 4, 5, 6]                   # where those residues PHYSICALLY sit in the source
+    motif_resids = [100 + p for p in motif_srcpos]   # author numbers = [102..106] (source res_ids start at 100)
+    src_coords = coords.copy()
+    src_coords[motif_srcpos] = coords[motif_design]                          # correct correspondence (10..14 ↔ 2..6)
+    rng = np.random.default_rng(7)
+    src_coords[motif_design] = src_coords[motif_design] + rng.normal(scale=8.0, size=(5, 3))  # break the wrong path
+    source = array([Atom(src_coords[i], chain_id="A", res_id=100 + i, res_name="GLY", atom_name="CA", element="C")
+                    for i in range(len(src_coords))])
+
+    src_pos = source_positions(source, [("A", r) for r in motif_resids])
+    assert src_pos == motif_srcpos
+
+    # correct mapping -> ~0; the old self-aligned default (source_residues=None -> design indices) -> wrong/large
+    assert motif_rmsd(design, source, motif_design, source_residues=src_pos) == pytest.approx(0.0, abs=1e-4)
+    assert motif_rmsd(design, source, motif_design) > 1.0
+
+    # 3-tuple score_design path threads (design_res, source_res) -> correct
+    dz = SimpleNamespace(atom_array=design, path="x/spa_design_0.pdb",
+                         condition="spa", lambda_scale=1.0, n_residues=len(coords))
+    ds = score_design(dz, motif=(source, motif_design, src_pos))
+    assert ds.motif_rmsd == pytest.approx(0.0, abs=1e-4) and ds.motif_satisfied is True
+
+    # missing ref -> ValueError naming it
+    with pytest.raises(ValueError):
+        source_positions(source, [("A", 999)])

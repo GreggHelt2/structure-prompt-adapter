@@ -364,6 +364,27 @@ def motif_rmsd(design_struct, motif_source, motif_residues, *, source_residues=N
     return ca_rmsd(s[si], d[di])
 
 
+def source_positions(source_struct, chain_resids) -> list[int]:
+    """Positional Cα indices in ``source_struct`` for each ``(chain_id, author_resid)`` ref (dev ``14`` §3).
+
+    Builds ``{(str(chain), int(resid)): position}`` over the source's per-residue Cα array (residues in
+    file order) and returns the position for each requested ``(chain, resid)``. This is the bridge from a
+    contig's **author-numbered** motif residues (e.g. 1CTT ``A102``) to ``motif_rmsd``'s **positional**
+    source indices — so a non-self-aligned / non-1-numbered / multi-chain source PDB is scored against the
+    *right* residues, not the design-frame positions (review #1). Raises ``ValueError`` naming any ref
+    absent from the source.
+    """
+    ca = _ca_array(source_struct)
+    index = {(str(c), int(r)): pos for pos, (c, r) in enumerate(zip(ca.chain_id, ca.res_id))}
+    out, missing = [], []
+    for chain, resid in chain_resids:
+        key = (str(chain), int(resid))
+        (out.append(index[key]) if key in index else missing.append(key))
+    if missing:
+        raise ValueError(f"source_positions: motif refs not found in source: {missing}")
+    return out
+
+
 # --------------------------------------------------------------------------------------------------
 # Designability — best-of-K self-consistency scRMSD (dev 05 §3); refold is a pluggable input
 # --------------------------------------------------------------------------------------------------
@@ -443,10 +464,12 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, c
         prompt: the prompt's source structure (AtomArray / path) for adherence, or ``None`` to skip.
         refolds: iterable of OF3 refold structures for designability (best-of-K), or ``None`` to skip.
         plddt: optional OF3 pLDDT for the best refold (gates designability when supplied).
-        motif: ``(source_struct, residues)`` (or ``{"source", "residues"}``) for the Run-B hard⊕soft
-            motif-RMSD (dev ``14`` §3), or ``None`` (the default — non-motif evals are untouched).
-            ``residues`` are 0-based positional Cα indices; see :func:`motif_rmsd`. Fills design-side
-            ``motif_rmsd`` + ``motif_satisfied``, and ``motif_rmsd_refold`` when ``refolds`` is also given.
+        motif: for the Run-B hard⊕soft motif-RMSD (dev ``14`` §3), or ``None`` (default — non-motif evals
+            untouched). Either a **2-tuple** ``(source_struct, residues)`` — self-aligned, source indexed by
+            the same design-frame ``residues`` — or a **3-tuple** ``(source_struct, design_residues,
+            source_residues)`` for a non-self-aligned source (e.g. 1CTT; the flywheel builds it via
+            :func:`source_positions`). Fills design-side ``motif_rmsd`` + ``motif_satisfied``, and
+            ``motif_rmsd_refold`` when ``refolds`` is also given.
         cfg / score_cfg: thresholds (a Hydra cfg with ``eval.score`` or a :class:`ScoreConfig`).
     """
     sc = score_cfg if isinstance(score_cfg, ScoreConfig) else score_config(cfg)
@@ -471,13 +494,23 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, c
         )
 
     if motif is not None:
-        source, residues = (motif["source"], motif["residues"]) if isinstance(motif, dict) else motif
-        ds.motif_rmsd = motif_rmsd(design, source, residues)
-        ds.motif_satisfied = bool(ds.motif_rmsd < sc.motif_rmsd_cutoff)
+        if len(motif) == 3:                          # (source, design_residues, source_residues)
+            source, design_res, source_res = motif
+        else:                                        # (source, residues) — self-aligned (source_res defaults)
+            source, design_res = motif
+            source_res = None
+        try:                                         # review #5: a bad source index must not abort the run
+            ds.motif_rmsd = motif_rmsd(design, source, design_res, source_residues=source_res)
+            ds.motif_satisfied = bool(ds.motif_rmsd < sc.motif_rmsd_cutoff)
+        except Exception as e:
+            print(f"[score] design-side motif_rmsd failed for {name}: {e}")
+            ds.motif_rmsd, ds.motif_satisfied = None, None
         if refolds is not None and ds.best_refold_idx is not None and ds.best_refold_idx >= 0:
             try:  # the best refold may differ in length from the motif source (rare) -> leave None
-                ds.motif_rmsd_refold = motif_rmsd(refolds[ds.best_refold_idx], source, residues)
-            except Exception:
+                ds.motif_rmsd_refold = motif_rmsd(refolds[ds.best_refold_idx], source, design_res,
+                                                  source_residues=source_res)
+            except Exception as e:
+                print(f"[score] refold-side motif_rmsd failed for {name}: {e}")  # review #7: log, don't swallow
                 ds.motif_rmsd_refold = None
     return ds
 
@@ -560,9 +593,11 @@ def aggregate(scores, *, structs_by_name=None, cfg=None, score_cfg=None) -> list
             if len(designable_structs) >= 2:
                 diversity_tm = pairwise_tm_diversity(designable_structs)
 
-        motif_scored = [s for s in items if s.motif_satisfied is not None]
+        # review #12: derive the satisfied-rate from motif_rmsd vs the cutoff (not the persisted per-design
+        # bool), so re-aggregating an existing scores set with a different cutoff stays self-consistent.
+        motif_scored = [s for s in items if s.motif_rmsd is not None]
         motif_satisfied_rate = (
-            sum(1 for s in motif_scored if s.motif_satisfied) / len(motif_scored)
+            sum(1 for s in motif_scored if s.motif_rmsd < sc.motif_rmsd_cutoff) / len(motif_scored)
             if motif_scored else None
         )
 

@@ -181,35 +181,38 @@ def _prompt_id(cfg) -> str:
 # --------------------------------------------------------------------------------------------------
 
 
-def _parse_contig_motif_indices(contig: str) -> list[int]:
-    """Design-frame 0-based indices of the motif residues in an RFD3 contig (dev ``14`` §1).
+def _parse_contig_motif(contig: str) -> list[tuple[int, str, int]]:
+    """``(design_index, chain, source_resid)`` for each motif residue in an RFD3 contig (dev ``14`` §1).
 
     Grammar (the RFD3 dialect-2 subset we use; e.g. ``"59,A60-71,79"`` or 1CTT
     ``"74,A102,1,A104,24,A129,2,A132,75"``): comma-separated tokens walked left→right over the design
-    sequence — a **bare integer** is a diffused scaffold gap of that many residues; a token starting
-    with a **chain letter** (``A102`` or ``A60-71``) is a fixed motif segment pulled from the input.
-    Returns the running design-position indices the motif occupies — what both the SPA prompt-mask (§2)
-    and ``motif_rmsd`` (`score.py`) consume. Rejects variable-length (``min-max``) gaps: the design
-    length must be fixed for the indices (and the design-aligned self-prompt) to be well-defined.
+    sequence — a **bare integer** is a diffused scaffold gap of that many residues (advances the design
+    cursor); a token starting with a **chain letter** (``A102`` or ``A60-71``) is a fixed motif segment
+    pulled from the input. Each motif residue maps its **design-frame position** to its **source (chain,
+    author-resid)** — the SPA prompt-mask consumes the design positions, while ``motif_rmsd`` consumes the
+    *source positions* (via :func:`spa.eval.score.source_positions`), so a non-self-aligned /
+    non-1-numbered / multi-chain source is scored correctly (review #1). Rejects variable-length
+    (``min-max``) gaps and a motif-free contig (the design length must be fixed + well-defined).
     """
     import re
 
-    motif: list[int] = []
+    out: list[tuple[int, str, int]] = []
     cursor = 0
     for tok in (t.strip() for t in str(contig).split(",")):
         if not tok:
             continue
         if tok[0].isalpha():                                   # motif segment from the input chain
-            m = re.fullmatch(r"[A-Za-z]+(\d+)(?:-(\d+))?", tok)
+            m = re.fullmatch(r"([A-Za-z]+)(\d+)(?:-(\d+))?", tok)
             if not m:
                 raise ValueError(f"contig: cannot parse motif token {tok!r}")
-            start = int(m.group(1))
-            end = int(m.group(2)) if m.group(2) else start
-            n = end - start + 1
-            if n < 1:
+            chain = m.group(1)
+            start = int(m.group(2))
+            end = int(m.group(3)) if m.group(3) else start
+            if end < start:
                 raise ValueError(f"contig: bad motif range {tok!r} (end < start)")
-            motif.extend(range(cursor, cursor + n))
-            cursor += n
+            for resid in range(start, end + 1):
+                out.append((cursor, chain, resid))
+                cursor += 1
         elif tok.isdigit():                                    # fixed-length diffused scaffold gap
             cursor += int(tok)
         else:                                                  # variable 'min-max' gap or junk
@@ -217,9 +220,40 @@ def _parse_contig_motif_indices(contig: str) -> list[int]:
                 f"contig: token {tok!r} unsupported for motif eval — use fixed-int gaps + chain-prefixed "
                 f"motif segments (no variable 'min-max' gaps; dev 14 §1)."
             )
-    if not motif:
+    if not out:
         raise ValueError(f"contig {contig!r} has no motif segments")
-    return motif
+    return out
+
+
+def _parse_contig_motif_indices(contig: str) -> list[int]:
+    """Design-frame 0-based indices of the motif residues (see :func:`_parse_contig_motif`)."""
+    return [d for (d, _chain, _resid) in _parse_contig_motif(contig)]
+
+
+def _contig_length(contig: str) -> int:
+    """Total design length a contig implies (Σ gap lengths + motif residue counts = the final cursor).
+
+    Used to assert the SPA prompt and the motif contig are the same length (dev ``14`` §0/§2; review #3/#6).
+    """
+    import re
+
+    cursor = 0
+    for tok in (t.strip() for t in str(contig).split(",")):
+        if not tok:
+            continue
+        if tok[0].isalpha():
+            m = re.fullmatch(r"([A-Za-z]+)(\d+)(?:-(\d+))?", tok)
+            if not m:
+                raise ValueError(f"contig: cannot parse motif token {tok!r}")
+            start, end = int(m.group(2)), (int(m.group(3)) if m.group(3) else int(m.group(2)))
+            if end < start:
+                raise ValueError(f"contig: bad motif range {tok!r} (end < start)")
+            cursor += end - start + 1
+        elif tok.isdigit():
+            cursor += int(tok)
+        else:
+            raise ValueError(f"contig: token {tok!r} unsupported for motif eval (dev 14 §1).")
+    return cursor
 
 
 def build_motif(cfg):
@@ -415,11 +449,23 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
         prompt_batched = p[None].expand(K, -1, -1).to(device=device, dtype=adapter_dtype).contiguous()
         if motif_residues is not None:               # non-overlap: SPA attends to the scaffold rows only (§2)
             N = prompt_batched.shape[1]
+            contig = str(cfg.eval.motif["contig"])
+            L = _contig_length(contig)
+            if N != L:                               # review #3/#6: prompt must match the contig design length
+                raise ValueError(
+                    f"SPA prompt length N={N} != contig design length L={L} (contig {contig!r}). The prompt "
+                    f"and the motif contig must be the same length — check for a BOS/EOS-unstripped prompt "
+                    f"cache or a cross-length/cross-fold prompt (dev 14 §0/§2)."
+                )
             bad = [i for i in motif_residues if i >= N]
             if bad:
                 raise ValueError(
-                    f"motif residue index ≥ prompt length {N}: {bad} — the SPA prompt and the contig motif "
-                    f"must be design-aligned (same length; dev 14 §0/§2)."
+                    f"motif residue index ≥ prompt length {N}: {bad} — design/contig misalignment (dev 14 §0/§2)."
+                )
+            if len(motif_residues) >= N:             # review #4: all-motif contig ⇒ every row masked ⇒ NaN softmax
+                raise ValueError(
+                    f"all-motif contig: {len(motif_residues)} motif rows of N={N} leaves no scaffold row for SPA "
+                    f"to attend → masked softmax would be NaN. Use a contig with diffused gaps."
                 )
             prompt_mask = torch.zeros(K, N, dtype=torch.bool, device=device)
             prompt_mask[:, motif_residues] = True

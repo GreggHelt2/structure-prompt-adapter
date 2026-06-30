@@ -91,17 +91,31 @@ def _fmt(value, prec: int = 3) -> str:
 
 
 def _print_summary(summaries, deltas) -> None:
-    """Print the compact per-``(condition, λ)`` table the poster reads (dev ``05`` §3 / ``06`` §6)."""
+    """Print the compact per-``(condition, λ)`` table the poster reads (dev ``05`` §3 / ``06`` §6).
+
+    Adds the hard⊕soft **motif** columns (motif-RMSD mean, satisfied-rate, Δmotif-RMSD) only when a motif
+    was scored (review #10) — keeps non-motif runs uncluttered.
+    """
     dmap = {(d.condition, float(d.lambda_scale)): d for d in deltas}
+    has_motif = any(getattr(s, "motif_satisfied_rate", None) is not None
+                    or (getattr(s, "motif_rmsd", None) is not None and s.motif_rmsd.n > 0)
+                    for s in summaries)
     print("\n=== SPA flywheel summary (dev 05 §3 / 06 §6) ===")
-    print(f"{'condition':<10}{'lambda':>8}{'n':>5}{'succ_rate':>11}{'mean_TM':>10}{'dTM':>9}{'d_succ':>9}")
-    print("-" * 62)
+    header = f"{'condition':<10}{'lambda':>8}{'n':>5}{'succ_rate':>11}{'mean_TM':>10}{'dTM':>9}{'d_succ':>9}"
+    if has_motif:
+        header += f"{'motifRMSD':>11}{'motif_sat':>10}{'dMotif':>9}"
+    print(header)
+    print("-" * len(header))
     for s in summaries:
         d = dmap.get((s.condition, float(s.lambda_scale)))
         d_tm = _fmt(d.d_tm_mean) if d else "—"
         d_succ = _fmt(d.d_success_rate) if d else "—"
-        print(f"{s.condition:<10}{_fmt(s.lambda_scale, 3):>8}{s.n_designs:>5}"
-              f"{_fmt(s.success_rate):>11}{_fmt(s.tm.mean):>10}{d_tm:>9}{d_succ:>9}")
+        row = (f"{s.condition:<10}{_fmt(s.lambda_scale, 3):>8}{s.n_designs:>5}"
+               f"{_fmt(s.success_rate):>11}{_fmt(s.tm.mean):>10}{d_tm:>9}{d_succ:>9}")
+        if has_motif:
+            d_motif = _fmt(d.d_motif_rmsd_mean) if d else "—"
+            row += f"{_fmt(s.motif_rmsd.mean):>11}{_fmt(s.motif_satisfied_rate):>10}{d_motif:>9}"
+        print(row)
     print()
 
 
@@ -153,9 +167,15 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
     # used, so the indices match the design frame. None ⇒ no motif scored (unconditional evals unchanged).
     motif_score = None
     if cfg.eval.get("motif"):
-        from .generate import _parse_contig_motif_indices
+        from .generate import _parse_contig_motif
+        from .score import _as_struct, source_positions
         m = cfg.eval.motif
-        motif_score = (str(m["source_pdb"]), _parse_contig_motif_indices(str(m["contig"])))
+        parsed = _parse_contig_motif(str(m["contig"]))               # [(design_idx, chain, author_resid), ...]
+        source_struct = _as_struct(str(m["source_pdb"]))             # load the source ONCE (review #8)
+        design_idx = [d for d, _ch, _r in parsed]
+        # map the contig's author-numbered motif residues -> source positional Cα indices (review #1):
+        src_pos = source_positions(source_struct, [(ch, r) for _d, ch, r in parsed])
+        motif_score = (source_struct, design_idx, src_pos)
 
     # Stage 4 — score each design (adherence if a prompt struct exists; designability if refolds exist;
     # motif-RMSD if a motif was scaffolded).
