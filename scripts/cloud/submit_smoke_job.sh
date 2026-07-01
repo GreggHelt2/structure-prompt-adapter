@@ -25,11 +25,13 @@ BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 RFD3_CKPT_URI="${RFD3_CKPT_URI:-$BUCKET/weights/rfd3_latest.ckpt}"
 OF3_CKPT_URI="${OF3_CKPT_URI:-$BUCKET/weights/of3-p2-155k.pt}"
 DISK_GB="${DISK_GB:-150}"                           # image + RFD3 (2.9G) + OF3 (2.3G) ckpts + tiny run
+RUN_SCRIPT="${RUN_SCRIPT:-run_smoke.sh}"            # in-container script under scripts/cloud/ (run_smoke.sh | run_calib.sh)
+LENGTHS="${LENGTHS:-}"                              # calibration only: comma lengths for run_calib.sh (ignored otherwise)
 STRATEGY="${STRATEGY:-ONDEMAND}"                    # ONDEMAND -> the approved H100 quota; omit scheduling
 NAME="${NAME:-spa-smoke-$(date -u +%Y%m%d-%H%M%S)}"
 GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
 
-BOOT="set -e; git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} /opt/spa && bash /opt/spa/scripts/cloud/run_smoke.sh"
+BOOT="set -e; git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} /opt/spa && bash /opt/spa/scripts/cloud/${RUN_SCRIPT}"
 
 CFG="$(mktemp --suffix=.yaml)"
 cat > "${CFG}" <<YAML
@@ -55,6 +57,7 @@ add_env BUCKET "${BUCKET}"
 add_env RFD3_CKPT_URI "${RFD3_CKPT_URI}"
 add_env OF3_CKPT_URI "${OF3_CKPT_URI}"
 add_env REPO_REF "${REPO_REF}"
+add_env LENGTHS "${LENGTHS}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;
