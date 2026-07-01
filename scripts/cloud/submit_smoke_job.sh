@@ -58,6 +58,11 @@ add_env RFD3_CKPT_URI "${RFD3_CKPT_URI}"
 add_env OF3_CKPT_URI "${OF3_CKPT_URI}"
 add_env REPO_REF "${REPO_REF}"
 add_env LENGTHS "${LENGTHS}"
+# run_eval.sh (B1-full) knobs — omitted when empty (full run uses manifest defaults / all prompts):
+add_env NUM_TIMESTEPS "${NUM_TIMESTEPS:-}"
+add_env SUBSET_IDS "${SUBSET_IDS:-}"
+add_env K_OVERRIDE "${K_OVERRIDE:-}"
+add_env NSEQ_OVERRIDE "${NSEQ_OVERRIDE:-}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;

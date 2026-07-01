@@ -44,10 +44,17 @@ LAM=$(python -c "import json;print(json.load(open('$MAN'))['lambda_scale'])")
 K=$(python -c "import json;print(json.load(open('$MAN'))['num_designs'])")
 NSEQ=$(python -c "import json;print(json.load(open('$MAN'))['num_seqs'])")
 gcloud storage cp "$BUCKET/checkpoints/$SPA_CKPT_REL" /workspace/weights/spa.pt
-log "config: spa_ckpt=$SPA_CKPT_REL  lambda=$LAM  K=$K  N=$NSEQ  timesteps=${NUM_TIMESTEPS:-default}"
+# Optional cheap-validation overrides (default = manifest values / all prompts).
+[ -n "${K_OVERRIDE:-}" ] && K="$K_OVERRIDE"
+[ -n "${NSEQ_OVERRIDE:-}" ] && NSEQ="$NSEQ_OVERRIDE"
+export SUBSET_IDS="${SUBSET_IDS:-}"   # comma list -> run only these prompts (validation pass); empty = all 25 (exported for the inline python)
+log "config: spa_ckpt=$SPA_CKPT_REL  lambda=$LAM  K=$K  N=$NSEQ  timesteps=${NUM_TIMESTEPS:-default}  subset=${SUBSET_IDS:-ALL}"
 
 # --- Per-prompt loop (id<TAB>contig; TAB-delimited so the comma-bearing contig stays one field) ---
-python -c "import json;[print(p['id']+chr(9)+p['contig']) for p in json.load(open('$MAN'))['prompts']]" > "$OUT/prompts.tsv"
+python -c "import json,os
+sub=set(x for x in os.environ.get('SUBSET_IDS','').split(',') if x)
+for p in json.load(open('$MAN'))['prompts']:
+    if not sub or p['id'] in sub: print(p['id']+chr(9)+p['contig'])" > "$OUT/prompts.tsv"
 TS_ARG=""; [ -n "$NUM_TIMESTEPS" ] && TS_ARG="eval.num_timesteps=$NUM_TIMESTEPS"
 n=0; ok=0
 while IFS=$'\t' read -r id contig; do
