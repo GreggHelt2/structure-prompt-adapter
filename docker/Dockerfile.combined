@@ -40,5 +40,11 @@ RUN /opt/conda/bin/conda create -y -n spa-verify-of3 -c conda-forge --override-c
          "import torch, triton, openfold3; print('of3 env OK', torch.__version__, '| triton', triton.__version__)" \
     && /opt/conda/bin/conda run -n spa-verify-of3 sh -c "command -v run_openfold"
 
+# tmtools — TM-score (tmtools.tm_align) for the Stage-4 eval scoring (adherence TM + diversity TM).
+# Goes in SYSTEM python: the flywheel + scoring run there; only the OF3 refold subprocess uses the conda
+# env. Absent from the training base (never needed for training); build-essential above supplies its C ext.
+RUN pip install --no-cache-dir tmtools \
+    && python -c "import tmtools; print('tmtools OK')"
+
 WORKDIR /workspace
 CMD ["/bin/bash"]
