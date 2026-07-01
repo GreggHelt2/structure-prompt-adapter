@@ -36,13 +36,14 @@ def _agg(scores, cond, lam):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="outputs/eval/bigN_h5_design")
+    ap.add_argument("--lam", type=float, default=2.0, help="the spa λ present in this run's dir")
     args = ap.parse_args()
 
     rows, base_rate, spa_rate, spa_mrr = [], [], [], []
     for d in sorted(glob.glob(f"{args.root}/runD_*")):
         u = os.path.basename(d)[len("runD_"):]
         sc = _scores(f"{d}/flywheel_results.json")
-        base, spa = _agg(sc, "baseline", 0.0), _agg(sc, "spa", 2.0)
+        base, spa = _agg(sc, "baseline", 0.0), _agg(sc, "spa", args.lam)
         if not base or not spa:
             continue
         rows.append((u, base, spa))
@@ -53,7 +54,7 @@ def main() -> None:
         if spa["mrr"] is not None:
             spa_mrr.append(spa["mrr"])
 
-    print(f"=== big-n H5 designability ({len(rows)} prompts) — motif⊕SPA, Run A·λ2 vs motif-only ===")
+    print(f"=== big-n H5 designability ({len(rows)} prompts) — motif⊕SPA, Run A·λ{args.lam:g} vs motif-only ===")
     print(f"{'prompt':<12}{'base des':>9}{'spa des':>9}{'base scR':>9}{'spa scR':>9}{'refold mRMSD':>13}")
     for u, b, s in rows:
         bd, sd = f"{b['des']}/{b['ndes']}", f"{s['des']}/{s['ndes']}"
@@ -64,7 +65,7 @@ def main() -> None:
 
     print("\n=== across-prompt summary ===")
     if base_rate and spa_rate:
-        print(f"  mean designable rate: baseline {st.mean(base_rate):.2f}  vs  SPA(Run A·λ2) {st.mean(spa_rate):.2f}"
+        print(f"  mean designable rate: baseline {st.mean(base_rate):.2f}  vs  SPA(Run A·λ{args.lam:g}) {st.mean(spa_rate):.2f}"
               f"  (d_succ {st.mean(spa_rate) - st.mean(base_rate):+.2f})")
         print(f"  prompts where SPA designable rate >= baseline: "
               f"{sum(1 for b, s in zip(base_rate, spa_rate) if s >= b)}/{len(spa_rate)}")
