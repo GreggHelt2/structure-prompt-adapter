@@ -1,6 +1,6 @@
 # Roots and absolute paths — kept in config/env, never in source (dev root CLAUDE.md portability rule).
 # Override the project root via env: SPA_PROJECT_ROOT=/path python scripts/train.py
-project_root: ${oc.env:SPA_PROJECT_ROOT,/home/user1/projects/spa}
+project_root: ${oc.env:SPA_PROJECT_ROOT,${oc.env:HOME}/projects/spa}
 models_root: ${paths.project_root}/models
 data_root: ${paths.project_root}/training_data
 # Foundry's RFD3 training-transform yamls (read by spa.data.dataset to rebuild the CDDB featurization,

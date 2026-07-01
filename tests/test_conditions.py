@@ -12,10 +12,9 @@ import pytest
 
 from spa.data.conditions import CoupledIslandCondition
 
-_CKPT = os.path.join(os.environ.get("SPA_PROJECT_ROOT", "/home/user1/projects/spa"),
-                     "models/rfdiffusion3/rfd3_latest.ckpt")
-_FOUNDRY_CFG = os.path.join(os.environ.get("SPA_PROJECT_ROOT", "/home/user1/projects/spa"),
-                            "needed_repos/foundry/models/rfd3/configs/datasets/train")
+_ROOT = os.environ.get("SPA_PROJECT_ROOT", os.path.expanduser("~/projects/spa"))
+_CKPT = os.path.join(_ROOT, "models/rfdiffusion3/rfd3_latest.ckpt")
+_FOUNDRY_CFG = os.path.join(_ROOT, "needed_repos/foundry/models/rfd3/configs/datasets/train")
 
 
 def _cond(**over):

@@ -17,7 +17,7 @@ from omegaconf import OmegaConf
 
 from spa.model import attach_spa
 
-ROOT = "/home/user1/projects/spa"
+ROOT = os.environ.get("SPA_PROJECT_ROOT", os.path.expanduser("~/projects/spa"))
 CKPT = os.environ.get("SPA_RFD3_CKPT", f"{ROOT}/models/rfdiffusion3/rfd3_latest.ckpt")
 ESM3_CACHE = f"{ROOT}/training_data/processed/esm3_cache"
 DATA = f"{ROOT}/training_data/proteina-atomistica_data_vrelease/atomistica_data_release"
