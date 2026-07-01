@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+# OF3-triton image — standalone OpenFold3 refolder for the cloud H100 (kernel path = TRITON).
+#
+# Isolated from the SPA cloud stack (dev recon): OF3's [cuequivariance] extra forces torch>=2.7 and
+# re-adds cuequivariance (which foundry[rfd3] avoids), and [deepspeed] needs a cutlass JIT build — so
+# OF3 gets its OWN image and the triton kernel path (ships INSIDE the cu124 torch wheel: no extra
+# install, no torch bump, no cutlass build). Parity with the local spa-verify-of3 env that ran the §2
+# designability: torch 2.5.1+cu124 (triton 3.1.0), openfold3 @ e583ecee (aqlaboratory/openfold-3, public).
+#
+# The of3-p2-155k.pt ckpt, the runner-yaml, and query JSONs come at RUNTIME (from GCS) — none baked here
+# (the 2 GB ckpt stays out of the image). Enable triton via configs/of3/of3_triton.yml (in the SPA repo).
+#
+# Build: docker/build_and_push_of3.sh  (CPU build; OF3 is public so no SSH forwarding needed).
+# ⚠️ Upstream has NOT validated any kernel on H100 ("to test") -> smoke-run a short fold before a matrix.
+
+FROM python:3.12-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONUNBUFFERED=1
+
+# git+curl: clone OF3 at build, pull weights/gcloud at runtime. build-essential + the X/GL/gomp libs:
+# a few OF3 deps (kalign-python compiles; rdkit/biotite want libGL/libXrender/libgomp at import).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates unzip build-essential \
+        libgomp1 libgl1 libxrender1 libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyTorch from the cu124 wheel index (bundles the CUDA 12.4 runtime + triton 3.1.0; the H100 host
+# provides the driver). MUST be installed before openfold3 (its build matches the runtime torch).
+RUN pip install \
+        torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+        --index-url https://download.pytorch.org/whl/cu124
+
+# OpenFold3, pinned to the commit spa-verify-of3 uses. NO extras: [cuequivariance] would force torch>=2.7
+# and [deepspeed] needs a JIT cutlass build — the triton path needs neither.
+RUN pip install "openfold3 @ git+https://github.com/aqlaboratory/openfold-3.git@e583ecee"
+
+# Build-time smoke: fail the build now (not on the H100) if the OF3/triton install is broken.
+RUN python -c "import torch, triton, openfold3; print('torch', torch.__version__, '| triton', triton.__version__, '| openfold3 OK')" \
+    && command -v run_openfold
+
+# gcloud for GCS I/O (ckpt + query JSON in, refold CIFs out); ADC via the Vertex job's SA.
+RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz -o /tmp/gcloud.tgz \
+    && tar -xzf /tmp/gcloud.tgz -C /opt && rm /tmp/gcloud.tgz \
+    && /opt/google-cloud-sdk/install.sh --quiet --usage-reporting false --path-update false \
+    && ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud \
+    && ln -s /opt/google-cloud-sdk/bin/gsutil /usr/local/bin/gsutil
+
+# GPU exposure for the nvidia-container runtime (Vertex GPU jobs). Without compute caps the CUDA driver
+# libs aren't mounted -> torch.cuda.is_available()=False.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

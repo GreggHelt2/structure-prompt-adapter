@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1.7
+# COMBINED cloud image = the spa-cloud stack (RFdiffusion3 + SPA + ESM3 + CLSS + atomworks + ProteinMPNN,
+# in system python) PLUS OpenFold3/triton in an ISOLATED `spa-verify-of3` conda env. Mirrors the local
+# machine (spa-dev + spa-verify-of3 as two envs) so the validation flywheel runs as ONE job/process,
+# end-to-end: RFD3±SPA generate -> ProteinMPNN -> OF3 refold -> score. No two-stage GCS handoff.
+#
+# The OF3Refolder defaults to conda_env="spa-verify-of3" and shells `conda run -n spa-verify-of3
+# run_openfold`, so the flywheel is UNCHANGED. OF3 stays in its own conda env -> its deps never re-solve
+# against the SPA stack's ~160 pins (the reason isolation was needed; a 2nd env gives it without a 2nd image).
+#
+# Builds FROM the already-pushed spa-cloud image (so no SSH forwarding / private-dep re-clone needed here;
+# OF3 is public). The OF3 recipe (torch 2.5.1+cu124 + openfold3 @ e583ecee + triton) is the one validated
+# by docker/Dockerfile.of3 (the standalone of3-triton build). Build: docker/build_and_push_combined.sh.
+
+FROM us-central1-docker.pkg.dev/spa-dev-499900/spa/spa-cloud:0.3.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# OF3 runtime system libs not in the slim spa-cloud base (rdkit/biotite want libGL/libXrender; kalign builds).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libgl1 libxrender1 libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Miniconda (the SPA stack stays in system python; conda hosts only the isolated OF3 env).
+RUN curl -fsSL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o /tmp/mc.sh \
+    && bash /tmp/mc.sh -b -p /opt/conda && rm /tmp/mc.sh \
+    && ln -s /opt/conda/bin/conda /usr/local/bin/conda
+
+# The `spa-verify-of3` conda env: OF3 + triton (the validated recipe), isolated site-packages.
+RUN /opt/conda/bin/conda create -y -n spa-verify-of3 python=3.12 \
+    && /opt/conda/bin/conda run -n spa-verify-of3 pip install --no-cache-dir \
+         torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124 \
+    && /opt/conda/bin/conda run -n spa-verify-of3 pip install --no-cache-dir \
+         "openfold3 @ git+https://github.com/aqlaboratory/openfold-3.git@e583ecee" \
+    && /opt/conda/bin/conda run -n spa-verify-of3 python -c \
+         "import torch, triton, openfold3; print('of3 env OK', torch.__version__, '| triton', triton.__version__)" \
+    && /opt/conda/bin/conda run -n spa-verify-of3 sh -c "command -v run_openfold"
+
+WORKDIR /workspace
+CMD ["/bin/bash"]
