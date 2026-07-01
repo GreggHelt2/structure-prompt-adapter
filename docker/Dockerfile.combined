@@ -27,10 +27,14 @@ RUN curl -fsSL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_6
     && ln -s /opt/conda/bin/conda /usr/local/bin/conda
 
 # The `spa-verify-of3` conda env: OF3 + triton (the validated recipe), isolated site-packages.
-RUN /opt/conda/bin/conda create -y -n spa-verify-of3 python=3.12 \
-    && /opt/conda/bin/conda run -n spa-verify-of3 pip install --no-cache-dir \
+# -c conda-forge --override-channels avoids the Anaconda `defaults` channel (its ToS gate blocks a
+# non-interactive `conda create`); also matches the local conda-forge/strict setup.
+# Create WITH pip and install via `python -m pip` — otherwise `conda run ... pip` resolves to the base
+# image's SYSTEM pip and installs into system-python, not this env (then the env has no torch).
+RUN /opt/conda/bin/conda create -y -n spa-verify-of3 -c conda-forge --override-channels python=3.12 pip \
+    && /opt/conda/bin/conda run -n spa-verify-of3 python -m pip install --no-cache-dir \
          torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124 \
-    && /opt/conda/bin/conda run -n spa-verify-of3 pip install --no-cache-dir \
+    && /opt/conda/bin/conda run -n spa-verify-of3 python -m pip install --no-cache-dir \
          "openfold3 @ git+https://github.com/aqlaboratory/openfold-3.git@e583ecee" \
     && /opt/conda/bin/conda run -n spa-verify-of3 python -c \
          "import torch, triton, openfold3; print('of3 env OK', torch.__version__, '| triton', triton.__version__)" \
