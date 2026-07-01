@@ -14,8 +14,8 @@ from omegaconf import OmegaConf
 
 from spa.model import attach_spa
 
-CKPT = os.environ.get("SPA_RFD3_CKPT", "/home/user1/projects/spa/models/rfdiffusion3/rfd3_latest.ckpt")
-ESM3_CACHE = "/home/user1/projects/spa/training_data/processed/esm3_cache"
+CKPT = os.environ.get("SPA_RFD3_CKPT", os.path.expanduser("~/projects/spa/models/rfdiffusion3/rfd3_latest.ckpt"))
+ESM3_CACHE = os.path.expanduser("~/projects/spa/training_data/processed/esm3_cache")
 
 pytestmark = pytest.mark.skipif(
     not (os.path.exists(CKPT) and torch.cuda.is_available()),

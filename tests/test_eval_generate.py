@@ -31,7 +31,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-CKPT = os.environ.get("SPA_RFD3_CKPT", "/home/user1/projects/spa/models/rfdiffusion3/rfd3_latest.ckpt")
+CKPT = os.environ.get("SPA_RFD3_CKPT", os.path.expanduser("~/projects/spa/models/rfdiffusion3/rfd3_latest.ckpt"))
 LENGTH = int(os.environ.get("SPA_EVAL_TEST_LENGTH", "16"))
 TIMESTEPS = int(os.environ.get("SPA_EVAL_TEST_TIMESTEPS", "10"))
 K = 2

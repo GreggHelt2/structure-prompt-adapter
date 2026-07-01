@@ -16,12 +16,12 @@ from spa.data.splits import _stem, assign_splits
 
 RATIOS = {"train": 0.8, "validate": 0.1, "test": 0.1}
 
-_META = (
-    "/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/"
+_META = os.path.expanduser(
+    "~/projects/spa/training_data/proteina-atomistica_data_vrelease/"
     "atomistica_data_release/metadata/metadata_atomistica_syn_release.parquet"
 )
-_PDB = (
-    "/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/"
+_PDB = os.path.expanduser(
+    "~/projects/spa/training_data/proteina-atomistica_data_vrelease/"
     "atomistica_data_release/pdb"
 )
 

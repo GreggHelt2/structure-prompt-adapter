@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 pytest.importorskip("esm")
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="ESM3 prompt test needs CUDA")
 
-TOY_DIR = os.environ.get("SPA_TOY_DIR", "/home/user1/projects/spa/training_data/toy")
+TOY_DIR = os.environ.get("SPA_TOY_DIR", os.path.expanduser("~/projects/spa/training_data/toy"))
 
 
 def _toy_pdb():

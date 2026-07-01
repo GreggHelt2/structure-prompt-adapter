@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(os.environ.get("SPA_PROTEINMPNN_REPO", "/home/user1/projects/spa/needed_repos/ProteinMPNN"))
+REPO = Path(os.environ.get("SPA_PROTEINMPNN_REPO", os.path.expanduser("~/projects/spa/needed_repos/ProteinMPNN")))
 RUN = REPO / "protein_mpnn_run.py"
 WEIGHTS = REPO / "vanilla_model_weights" / "v_48_020.pt"
 L = 12          # backbone length (residues) — tiny for speed; ProteinMPNN clamps k-NN to length

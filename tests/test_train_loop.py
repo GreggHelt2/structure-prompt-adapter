@@ -136,8 +136,8 @@ def test_load_spa_accepts_export_and_full_state(tmp_path):
 # GPU end-to-end resume (needs the real RFD3 ckpt + CUDA — mirrors test_harness gating)
 # --------------------------------------------------------------------------------------------------
 
-CKPT = os.environ.get("SPA_RFD3_CKPT", "/home/user1/projects/spa/models/rfdiffusion3/rfd3_latest.ckpt")
-ESM3_CACHE = "/home/user1/projects/spa/training_data/processed/esm3_cache"
+CKPT = os.environ.get("SPA_RFD3_CKPT", os.path.expanduser("~/projects/spa/models/rfdiffusion3/rfd3_latest.ckpt"))
+ESM3_CACHE = os.path.expanduser("~/projects/spa/training_data/processed/esm3_cache")
 
 gpu = pytest.mark.skipif(
     not (os.path.exists(CKPT) and torch.cuda.is_available()),
@@ -150,7 +150,7 @@ def _toy_cfg(ckpt_dir, max_steps, ckpt_every):
         {
             "run_name": "c6_resume",
             "paths": {"rfd3_ckpt": CKPT, "esm3_cache_dir": ESM3_CACHE,
-                      "data_root": "/home/user1/projects/spa/training_data"},
+                      "data_root": os.path.expanduser("~/projects/spa/training_data")},
             "hardware": {"device": "cuda:0", "batch_size": 1, "grad_accum": 1},
             "data": {"name": "toy", "conditioning": None},
             "model": {"c_query": 768, "c_kv": 1536, "c_model": 768, "n_head": 8, "shared_kv": True,
