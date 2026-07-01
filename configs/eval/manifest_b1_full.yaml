@@ -1,0 +1,48 @@
+# B1-full eval manifest — the pinned cloud designability set (hard⊕soft, K=8/N=8, λ=1).
+#
+# = curated-15 (≤256 res; docs/plan/12 §3 / configs/eval/manifest_curated15.yaml) EXTENDED with a
+# long-10 (256–384 res) drawn from the SAME pinned test split (v1_seed0_8-1-1_lenstrat, §12 50-pool
+# rows #31–#50). The long-10 are H100-only (RFD3 gen + OF3 refold >256 need the H100; the calibration
+# 2026-07-01 confirmed OF3 triton folds 384 res on the 80 GB H100). Purpose: firm the lean K=4
+# designability (docs/results/02 §4) at K=8 AND extend it to the big folds the A5000 can't refold.
+#
+# Each entry yields BOTH a SPA soft-conditioning prompt (ESM3 [L,1536] .pt) AND a DSSP-carved self-motif
+# (hard) spanning the full length (scripts/eval/carve_motif.py) — the hard⊕soft headline. pdb =
+# <pdb_dir>/AF-<id>-F1-model_v4_esmfold_v1.pdb (local training_data; embeddings regenerated locally
+# byte-identically, memory: esm3-weights-byte-identical-local-cloud). Prep: scripts/eval/prep_b1_full.py.
+
+split_id: v1_seed0_8-1-1_lenstrat
+pdb_pattern: "AF-{id}-F1-model_v4_esmfold_v1.pdb"
+lambda_scale: 1
+num_designs: 8
+num_seqs: 8
+spa_ckpt: spa-Nx1536-uncond/spa_C_final.pt   # Run A (N×1536, unconditional) — the emergent zero-shot headline ckpt
+
+prompts:
+  # --- curated-15 (band: ≤256 res) ---
+  - {id: A0A1X7NTP0, len: 52,  fold: all-a,     band: le256}
+  - {id: A0A6A0D1E8, len: 87,  fold: all-b,     band: le256}
+  - {id: A0A3P5VTL4, len: 88,  fold: all-b,     band: le256}
+  - {id: A0A090ME36, len: 90,  fold: all-b,     band: le256}
+  - {id: A0A7S1B8G4, len: 105, fold: all-b,     band: le256}
+  - {id: A0A820JRM2, len: 110, fold: irregular, band: le256}
+  - {id: A0A6P1U7L6, len: 121, fold: all-b,     band: le256}
+  - {id: A0A7S3EB45, len: 125, fold: all-b,     band: le256}
+  - {id: A0A522W419, len: 150, fold: a-b,       band: le256}
+  - {id: A0A2X2KHU0, len: 151, fold: all-a,     band: le256}
+  - {id: R7VVY2,     len: 160, fold: irregular, band: le256}
+  - {id: A0A6J8EPQ1, len: 181, fold: a-b,       band: le256}
+  - {id: A0A7C9GW19, len: 206, fold: all-a,     band: le256}
+  - {id: H1SDK8,     len: 210, fold: a-b,       band: le256}
+  - {id: A0A1X0IID6, len: 247, fold: a-b,       band: le256}
+  # --- long-10 (band: 256–384 res, H100-only) ---
+  - {id: A0A7X9IJ69, len: 258, fold: a-b,       band: gt256}
+  - {id: A0A7H1NU56, len: 278, fold: all-a,     band: gt256}
+  - {id: A0A100VYQ9, len: 285, fold: a-b,       band: gt256}
+  - {id: A0A7W1F6F8, len: 295, fold: all-a,     band: gt256}
+  - {id: A0A1J5JLG0, len: 306, fold: a-b,       band: gt256}
+  - {id: A0A7V6IU77, len: 308, fold: all-a,     band: gt256}
+  - {id: A0A849EQ42, len: 326, fold: a-b,       band: gt256}
+  - {id: V6DV60,     len: 347, fold: a-b,       band: gt256}
+  - {id: A0A497MDD1, len: 348, fold: all-a,     band: gt256}
+  - {id: A0A2V8GJC1, len: 374, fold: a-b,       band: gt256}
