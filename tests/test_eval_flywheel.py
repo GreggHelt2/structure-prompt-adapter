@@ -21,17 +21,17 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-CKPT = os.environ.get("SPA_RFD3_CKPT", "/home/user1/projects/spa/models/rfdiffusion3/rfd3_latest.ckpt")
-PROTEINMPNN_REPO = os.environ.get(
-    "SPA_PROTEINMPNN_REPO", "/home/user1/projects/spa/needed_repos/ProteinMPNN"
-)
+# Heavy GPU integration test — set these env vars to run it locally; otherwise it skips (below).
+CKPT = os.environ.get("SPA_RFD3_CKPT")
+PROTEINMPNN_REPO = os.environ.get("SPA_PROTEINMPNN_REPO")
 LENGTH = int(os.environ.get("SPA_EVAL_TEST_LENGTH", "16"))
 TIMESTEPS = int(os.environ.get("SPA_EVAL_TEST_TIMESTEPS", "8"))
 K = 2
 
 pytestmark = pytest.mark.skipif(
-    not (os.path.exists(CKPT) and os.path.isdir(PROTEINMPNN_REPO) and torch.cuda.is_available()),
-    reason="real RFD3 ckpt, ProteinMPNN repo, and/or CUDA device not available",
+    not (CKPT and os.path.exists(CKPT) and PROTEINMPNN_REPO and os.path.isdir(PROTEINMPNN_REPO)
+         and torch.cuda.is_available()),
+    reason="set SPA_RFD3_CKPT + SPA_PROTEINMPNN_REPO and have a CUDA device to run this GPU test",
 )
 
 

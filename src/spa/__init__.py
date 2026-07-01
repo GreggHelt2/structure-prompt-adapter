@@ -3,7 +3,7 @@
 A parameter-efficient decoupled-cross-attention sidecar for RFdiffusion3, conditioned on
 ESM3 structural prompts. RFdiffusion3 and ESM3 stay frozen; only SPA trains.
 
-Design source of truth: ``../structure-prompt-adapter-dev/docs/plan/`` (see repo CLAUDE.md).
+See ``README.md`` for an overview, results, and the ISMB 2026 poster abstract.
 
 Package map:
     spa.model.cross_attention  -- SPACrossAttention (the decoupled cross-attn term)
