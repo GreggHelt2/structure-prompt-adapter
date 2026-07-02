@@ -1,0 +1,30 @@
+# B4 named-fold demos — recognizable external folds SPA conditions on (dev 12 §5; assembled 2026-07-02).
+#
+# SOFT conditioning (variant C / Run A): does SPA steer a design toward a *recognizable* fold given that
+# fold's ESM3 prompt? The poster "money-shot" — folds CDDB's anonymous metagenomic monomers can't show.
+#
+# ⚠️ CLAIM FORK (dev 12 §1/§5/§7):
+#   - QUALITATIVE demo  -> ready now: external PDBs are NOT in the CDDB cache, so fresh ESM3 prompts were
+#     computed (staged at gs://…/eval/b4/prep/). No held-out claim.
+#   - HELD-OUT claim    -> additionally needs a Foldseek homology-check vs the CDDB TRAIN split (Foldseek is
+#     NOT installed; also needs a ~364k train-split Foldseek DB build). Only then can a demo be called
+#     "held-out / generalization". Foldseek is NOT part of the ProteinMPNN->OF3 flywheel.
+#
+# Prep: scripts computed a single-chain ESM3 prompt per fold (chain extraction so TM-scoring uses the same
+# one chain). All ≤384 res -> H100-only band (le384). Deploy via run_variant_desig.sh over gs://…/eval/b4/prep
+# (BAND=le384, VARIANTS=C, LAM=0.5,1,2, K=8, N=8). esmGFP has no PDB (a synthesis) -> 1QY3 is the GFP scaffold.
+
+claim_status: qualitative            # -> "held_out" once the Foldseek check passes
+prep_uri: gs://genomancer-spa-cache/eval/b4/prep
+pdb_source: RCSB                     # https://files.rcsb.org/download/<ID>.pdb
+
+folds:
+  - {id: 1QY3, chain: A, fold: all-b, len: 227, name: GFP_beta_barrel, note: "headline; ESM3's GFP template (esmGFP has no PDB)"}
+  - {id: 7RPN, chain: A, fold: a-b,   len: 252, name: TIM_barrel,      note: "iconic (α/β)8"}
+  - {id: 8SIU, chain: A, fold: all-b, len: 365, name: beta_propeller,  note: "largest; fits ≤384"}
+  - {id: 7SBD, chain: H, fold: all-b, len: 209, name: immunoglobulin,  note: "chain H (single-chain-extracted)"}
+  - {id: 7YII, chain: A, fold: a-b,   len: 273, name: ab_hydrolase,    note: "α/β-hydrolase"}
+  - {id: 6E6R, chain: A, fold: a-b,   len: 56,  name: ferredoxin,      note: "small/fast"}
+
+# λ guidance from the λ×designability sweep (docs/results/02 §2): β folds → λ≈0.5–1, α/β → λ≈1–2. The deploy
+# sweeps λ∈{0.5,1,2} per fold (baseline + spa) so the best visual can be picked per fold at its sweet spot.
