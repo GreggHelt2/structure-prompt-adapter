@@ -47,10 +47,23 @@ def test_subregion_keep_empty_raises():
         subregion_keep(_cfg({"keep": []}))
 
 
+def test_subregion_keep_range():
+    from spa.eval.generate import subregion_keep
+
+    assert subregion_keep(_cfg({"keep_range": [3, 7]})) == [3, 4, 5, 6]   # [start, end)
+
+
+def test_subregion_keep_range_bad():
+    from spa.eval.generate import subregion_keep
+
+    with pytest.raises(ValueError, match="end>start"):
+        subregion_keep(_cfg({"keep_range": [7, 3]}))
+
+
 def test_subregion_keep_missing_keep_raises():
     from spa.eval.generate import subregion_keep
 
-    with pytest.raises(ValueError, match="no `keep`"):
+    with pytest.raises(ValueError, match="neither"):
         subregion_keep(_cfg({"foo": 1}))
 
 

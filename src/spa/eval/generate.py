@@ -295,16 +295,29 @@ def build_motif(cfg):
 
 
 def subregion_keep(cfg) -> list[int] | None:
-    """Sorted 0-based indices of the kept sub-region S from ``eval.subregion.keep`` (``None`` if unset)."""
+    """Sorted 0-based indices of the kept sub-region S (``None`` if ``eval.subregion`` unset).
+
+    Two forms: ``eval.subregion.keep`` = an explicit index list, or ``eval.subregion.keep_range`` =
+    ``[start, end)`` (compact — the contiguous S the domain/segment samplers produce; avoids a long
+    CLI list on the cloud). Exactly one must be given.
+    """
     sr = cfg.eval.get("subregion")
     if not sr:
         return None
     keep = sr.get("keep") if hasattr(sr, "get") else None
-    if keep is None:
-        raise ValueError("eval.subregion is set but has no `keep` list of residue indices.")
-    out = sorted({int(i) for i in keep})
+    krange = sr.get("keep_range") if hasattr(sr, "get") else None
+    if keep is None and krange is None:
+        raise ValueError("eval.subregion is set but has neither `keep` (index list) nor `keep_range` [start,end).")
+    if krange is not None:
+        lo, hi = int(krange[0]), int(krange[1])
+        if hi <= lo:
+            raise ValueError(f"eval.subregion.keep_range must be [start,end) with end>start; got {list(krange)}")
+        idxs = range(lo, hi)
+    else:
+        idxs = keep
+    out = sorted({int(i) for i in idxs})
     if not out:
-        raise ValueError("eval.subregion.keep is empty — S must contain at least one residue.")
+        raise ValueError("eval.subregion sub-region S is empty — S must contain at least one residue.")
     return out
 
 
