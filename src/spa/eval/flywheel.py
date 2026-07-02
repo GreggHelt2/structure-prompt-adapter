@@ -176,6 +176,19 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
         # map the contig's author-numbered motif residues -> source positional Cα indices (review #1):
         src_pos = source_positions(source_struct, [(ch, r) for _d, ch, r in parsed])
         motif_score = (source_struct, design_idx, src_pos)
+    elif cfg.eval.get("subregion"):
+        # Sub-region "scaffolding" eval (dev 17 §7 / 16 §9.5): score the design's S region vs the
+        # prompt structure's S region (self-aligned — design length == N == prompt length, so S indexes
+        # both identically). prompt_struct is the held-out structure behind the SPA prompt (the same
+        # adherence reference). Fills design-side + refold-side sub-region motif-RMSD like the Run-B path.
+        from .generate import subregion_keep
+        keep = subregion_keep(cfg)
+        if prompt_struct is None:
+            print("[flywheel] eval.subregion set but no prompt structure -> cannot score sub-region "
+                  "motif-RMSD; skipping it (set eval.prompt_pdb / eval.flywheel.prompt_struct).")
+        else:
+            from .score import _as_struct
+            motif_score = (_as_struct(prompt_struct), keep)   # self-aligned: design[S] vs prompt[S]
 
     # Stage 4 — score each design (adherence if a prompt struct exists; designability if refolds exist;
     # motif-RMSD if a motif was scaffolded).

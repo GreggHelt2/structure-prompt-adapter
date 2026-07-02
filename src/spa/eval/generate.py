@@ -287,6 +287,49 @@ def build_motif(cfg):
 
 
 # --------------------------------------------------------------------------------------------------
+# Sub-region "scaffolding" mask (soft-only; dev 17 §7 / 16 §9.5) — SPA conditions on a sub-region S
+# of the prompt only. This is the OPPOSITE polarity to the Run-B motif mask (which masks the motif so
+# SPA attends to the scaffold): here we KEEP S and mask its complement, so SPA attends to S's rows
+# only. No native RFD3 motif is placed — the design is unconditional-length (== N == prompt length).
+# --------------------------------------------------------------------------------------------------
+
+
+def subregion_keep(cfg) -> list[int] | None:
+    """Sorted 0-based indices of the kept sub-region S from ``eval.subregion.keep`` (``None`` if unset)."""
+    sr = cfg.eval.get("subregion")
+    if not sr:
+        return None
+    keep = sr.get("keep") if hasattr(sr, "get") else None
+    if keep is None:
+        raise ValueError("eval.subregion is set but has no `keep` list of residue indices.")
+    out = sorted({int(i) for i in keep})
+    if not out:
+        raise ValueError("eval.subregion.keep is empty — S must contain at least one residue.")
+    return out
+
+
+def subregion_key_padding_mask(keep, N: int, K: int, device):
+    """``[K, N]`` bool key-padding mask, ``True`` at rows ``∉ keep`` (masked), for the sub-region eval.
+
+    Returns ``None`` when ``keep`` spans all N rows (⇒ no masking, the global/full-prompt control).
+    Guards the indices against the prompt length ``N`` (a keep index ≥ N is a driver/length bug).
+    """
+    import torch
+
+    if min(keep) < 0 or max(keep) >= N:
+        raise ValueError(f"eval.subregion.keep index out of range for prompt length N={N}: "
+                         f"kept∈[{min(keep)},{max(keep)}] (need eval.length == N).")
+    if len(keep) >= N:
+        print(f"[generate] subregion: keep spans all N={N} rows -> no mask (global/full-prompt control).")
+        return None
+    mask = torch.ones(K, N, dtype=torch.bool, device=device)
+    mask[:, keep] = False   # attend to S's rows only
+    print(f"[generate] subregion mask: SPA attends to {len(keep)}/{N} rows "
+          f"[{min(keep)}..{max(keep)}] (masked {N - len(keep)} non-S rows).")
+    return mask
+
+
+# --------------------------------------------------------------------------------------------------
 # Output (F1.5.2 CIF→PDB, done in-memory from the RFD3 AtomArray)
 # --------------------------------------------------------------------------------------------------
 
@@ -447,6 +490,15 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     # RFD3; spa = motif ⊕ SPA). None ⇒ unconditional (today's path, unchanged). dev 14 §1.
     motif_spec, motif_residues = build_motif(cfg)
 
+    # Sub-region "scaffolding" eval (dev 17 §7 / 16 §9.5): SPA conditions on a sub-region S of the
+    # prompt only (mask non-S rows). Mutually exclusive with the native motif — opposite mask polarity
+    # (motif masks S so SPA does the scaffold; this KEEPS S so SPA does only the sub-region). No native
+    # motif is placed, so the design is unconditional-length (== N == prompt length).
+    subregion = subregion_keep(cfg)
+    if subregion is not None and motif_residues is not None:
+        raise ValueError("eval.subregion and eval.motif are mutually exclusive (subregion keeps S; "
+                         "motif masks S). Set only one.")
+
     # Resolve + batch the prompt to [K, N, c_kv] once (constant across the diffusion batch). Needed by
     # 'spa' (real prompt) and 'shuffle' (row-permuted prompt); the 'null'/'baseline' controls need none.
     prompt_batched = None
@@ -477,6 +529,8 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
             prompt_mask = torch.zeros(K, N, dtype=torch.bool, device=device)
             prompt_mask[:, motif_residues] = True
             print(f"[generate] SPA prompt-mask: {len(motif_residues)} motif rows masked of N={N} (non-overlap).")
+        elif subregion is not None:                  # sub-region scaffolding: SPA attends to S's rows only
+            prompt_mask = subregion_key_padding_mask(subregion, p.shape[0], K, device)
         if "spa" in conditions:
             prompt_batched = p[None].expand(K, -1, -1).to(device=device, dtype=adapter_dtype).contiguous()
         if "shuffle" in conditions:                  # control: permute prompt rows ⇒ scrambled structure

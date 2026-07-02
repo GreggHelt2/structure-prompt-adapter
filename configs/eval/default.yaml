@@ -17,6 +17,15 @@ prompt_cache: null         # OR a precomputed [N,1536] .pt (cloud/ESM3 cache reu
 use_sequence: false        # structure-only prompt by default (dev 01 §3.5)
 prompt_id: null            # output-name group id (null -> prompt file stem, else "design")
 
+# Sub-region "scaffolding" eval (dev 17 §7 / 16 §9.5) — the multigranularity ("editing") probe.
+# null -> off (byte-identical to today). When set, SPA conditions on a SUB-REGION S of the prompt
+# only: generate.py masks the prompt to the kept rows (key_padding_mask True at rows ∉ S), and the
+# flywheel scores sub-region motif-RMSD (design[S] / refold[S] vs prompt[S], self-aligned). Requires
+# eval.length == N == the prompt-structure length so S indexes the design and prompt identically.
+# MUTUALLY EXCLUSIVE with eval.motif (that path masks S; this one keeps S). N×1536 (variant C) only,
+# per dev 17 §5 (pooled variants drop a per-residue mask). Usually driven by scripts/eval/run_scaffold_eval.py.
+subregion: null            # e.g. {keep: [0,1,...,59]}  (0-based residue indices of S; attend to these rows only)
+
 out_dir: ./outputs/eval/generate   # relative -> resolved against the original cwd under Hydra
 
 # SPA Stage-2 inverse-folding knobs (dev 05_validation_pipeline.md "Stage 2 — Inverse fold (ProteinMPNN)").
