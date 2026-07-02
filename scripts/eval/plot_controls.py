@@ -90,7 +90,7 @@ def main() -> None:
     ax2.set_xticks(list(x)); ax2.set_xticklabels(labels, fontsize=9)
     ax2.set_ylabel("designable fraction  d_succ")
     ax2.set_ylim(0, 1.12)
-    ax2.set_title("Designability preserved")
+    ax2.set_title("Designability")
     ax2.grid(axis="y", color="#eee", zorder=0); ax2.set_axisbelow(True)
 
     fig.suptitle("Specificity controls — A0A522W419 (soft-only, K=8): SPA needs the *right* prompt",
