@@ -95,7 +95,8 @@ def main() -> None:
                  fontsize=12.5, y=0.99)
     fig.text(0.5, 0.005, BANDS, ha="center", fontsize=8.5, color="#555")
     fig.tight_layout(rect=[0, 0.03, 1, 0.94])
-    fig.savefig(args.out, dpi=150)
+    from poster_style import savefig_poster
+    savefig_poster(fig, args.out)  # 300-DPI PNG + vector PDF sibling (poster-ready)
     print(f"[plot] wrote {args.out}")
 
 

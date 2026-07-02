@@ -89,7 +89,8 @@ def main() -> None:
     fig.suptitle("Three SPA variants — near-equivalent on both axes; the cheap 1×32 holds its own "
                  "(soft-only, 15 held-out folds, K=4)", fontsize=12, y=1.0)
     fig.tight_layout(rect=[0, 0, 1, 0.9])
-    fig.savefig(args.out, dpi=150)
+    from poster_style import savefig_poster
+    savefig_poster(fig, args.out)  # 300-DPI PNG + vector PDF sibling (poster-ready)
     print(f"[plot] wrote {args.out}")
 
 

@@ -96,7 +96,8 @@ def main() -> None:
     fig.suptitle("Specificity controls — A0A522W419 (soft-only, K=8): SPA needs the *right* prompt",
                  fontsize=13, y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
-    fig.savefig(args.out, dpi=150)
+    from poster_style import savefig_poster
+    savefig_poster(fig, args.out)  # 300-DPI PNG + vector PDF sibling (poster-ready)
     print(f"[plot] wrote {args.out}  (TM: " + ", ".join(f"{l.splitlines()[0]}={t:.2f}"
           for l, t in zip(labels, tms)) + ")")
 

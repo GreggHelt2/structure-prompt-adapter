@@ -122,7 +122,8 @@ def main() -> None:
     fig.text(0.5, 0.032, "A parameter-efficient, non-destructive sidecar — identity at rest, tunable by λ.",
              ha="center", fontsize=10.5, style="italic", color=MUTED)
 
-    fig.savefig(args.out, dpi=150)
+    from poster_style import savefig_poster
+    savefig_poster(fig, args.out)  # 300-DPI PNG + vector PDF sibling (poster-ready)
     print(f"[plot] wrote {args.out}")
 
 
