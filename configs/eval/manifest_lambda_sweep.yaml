@@ -1,4 +1,9 @@
-# λ×designability sweep eval manifest (dev 13 §7 / 12 §3; pinned 2026-07-01).
+# λ×designability TRADEOFF sweep — eval manifest (dev 13 §7 / 12 §3; pinned 2026-07-01).
+#
+# NAME/scope (disambiguation): this drives the FLYWHEEL run that measures the adherence↔DESIGNABILITY
+# tradeoff across λ (RFD3+SPA -> ProteinMPNN -> OF3), per fold. It is NOT the "λ-controllability control
+# ablation" (adherence-only, config-only, no OF3) from the ablation suite (06 §4 / 08 §6) — a different,
+# lighter run. Don't conflate the two under the bare shorthand "λ-sweep".
 #
 # = the pinned curated-15 (manifest_curated15.yaml) PLUS 2 more held-out irregular folds pulled from
 # the same 50-prompt pool (dev 12 §3 pool #19 A0A7K0RG18, #28 A0A1Q8BPK6), so the fold-dependent
