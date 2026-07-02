@@ -370,9 +370,10 @@ def _normalize_conditions(value) -> list[str]:
     if value is None:
         return ["baseline"]
     conds = [value] if isinstance(value, str) else list(value)
-    # control ablations (dev 06): 'null' = SPA live on the learned null token e∅ (no real prompt);
+    # control ablations (dev 06): 'nullprompt' = SPA live on the learned null token e∅ (no real prompt);
     # 'shuffle' = SPA fed a row-permuted prompt (scrambled structure). Both config-gated add-ons.
-    allowed = ("baseline", "spa", "null", "shuffle")
+    # ('nullprompt', NOT 'null' — a bare 'null' is a YAML/Hydra reserved literal that parses to None.)
+    allowed = ("baseline", "spa", "nullprompt", "shuffle")
     for c in conds:
         if c not in allowed:
             raise ValueError(f"unknown condition {c!r} (expected one of {allowed})")
@@ -406,8 +407,8 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
 
     Iterates ``eval.conditions`` × ``eval.lambda_scale``. Conditions: ``baseline`` (wrapped-no-prompt
     ≡ vanilla RFD3, runs once at λ=0); ``spa`` (the real structural prompt); and the control ablations
-    ``null`` (SPA live on the learned null token e∅ — no real prompt) and ``shuffle`` (SPA fed a
-    row-permuted prompt — scrambled structure). ``baseline`` runs once; ``spa``/``null``/``shuffle``
+    ``nullprompt`` (SPA live on the learned null token e∅ — no real prompt) and ``shuffle`` (SPA fed a
+    row-permuted prompt — scrambled structure). ``baseline`` runs once; ``spa``/``nullprompt``/``shuffle``
     sweep λ. Each run re-seeds to ``eval.seed`` then rolls out the full sampler for K =
     ``eval.num_designs`` designs, writing ``{prompt_id}_{condition}_lambda{λ}_{idx}.pdb`` (+ a small
     sidecar ``.json``) under ``eval.out_dir``.
@@ -489,7 +490,7 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
         for lam in run_lambdas:
             if condition == "baseline":
                 adapter.clear_prompt()               # wrappers return base only == vanilla RFD3 (± native motif)
-            elif condition == "null":                # control: SPA live on the learned null token e∅ (no real prompt)
+            elif condition == "nullprompt":          # control: SPA live on the learned null token e∅ (no real prompt)
                 adapter.set_null_prompt(K)
                 adapter.set_scale(lam)
             elif condition == "shuffle":             # control: SPA fed the row-permuted (scrambled) prompt
