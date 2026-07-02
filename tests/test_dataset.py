@@ -162,3 +162,58 @@ def test_run_b_motif_mask_and_loss():
     spa_grad = sum((p.grad.abs().sum().item() if p.grad is not None else 0.0) for p in adapter.parameters())
     assert all(map(math.isfinite, losses)) and min(losses[3:]) < losses[0]
     assert all(host_none) and spa_grad > 0
+
+
+def test_multigranularity_mask_and_loss():
+    """Multigranularity (dev 17 editing curriculum): native conditioning is unconditional; the SPA
+    prompt is masked to a sampled sub-region S (here forced to `segment` for a guaranteed non-empty
+    mask). A frozen masked example overfits — loss falls, stays finite, gradient reaches SPA only."""
+    from spa.data.dataset import CDDBPromptDataset, move_to_device
+    from spa.train.harness import (
+        build_engine, build_loss, frozen_rfd3_net, set_host_train_mode, spa_training_step,
+    )
+
+    cfg = _cfg()
+    cfg.data.conditioning = "multigranularity"
+    cfg.data.granularity = {"weights": {"global": 0.0, "segment": 1.0, "domain": 0.0},
+                            "min_seg": 12, "contact_thresh": 8.0, "min_dom": 40, "domain_score_max": 0.4}
+    device = torch.device(cfg.hardware.device)
+    ds = CDDBPromptDataset(cfg, split="train")
+    if len(ds) == 0:
+        pytest.skip("no train-split structure has a cached ESM3 prompt")
+
+    # segment weights guarantee a mask unless the window covers all of N (then None); grab a masked one
+    seg_ex = next((ex for _ in range(16) if (ex := ds[0])["prompt_mask"] is not None), None)
+    assert seg_ex is not None, "segment granularity produced no sub-region mask in 16 draws"
+    pm = seg_ex["prompt_mask"]
+    N = pm.shape[1]
+    n_tokens = int(seg_ex["feats"]["atom_to_token_map"].max()) + 1
+    masked = int(pm[0].sum())
+    assert N == n_tokens                           # prompt aligns to the SPA query token track
+    assert 0 < masked < N                          # masks non-S, leaves a non-empty S
+    assert pm.dtype == torch.bool and tuple(pm.shape) == (seg_ex["t"].shape[0], N)
+    kept = torch.where(~pm[0])[0]
+    assert (kept[1:] - kept[:-1] == 1).all()       # S is a single contiguous window
+
+    engine = build_engine(cfg)
+    net = frozen_rfd3_net(engine)
+    adapter = attach_spa(net, cfg).to(device)
+    set_host_train_mode(net)
+    loss_fn = build_loss(cfg).to(device)
+    ex = move_to_device(seg_ex, device)
+
+    host_p = net.diffusion_module.diffusion_transformer.blocks[0].attention_pair_bias.orig.to_q.weight
+    opt = torch.optim.AdamW(adapter.parameters(), lr=1e-4)
+    g = torch.Generator().manual_seed(0)
+    losses, host_none = [], []
+    for _ in range(30):
+        opt.zero_grad()
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            loss, _ = spa_training_step(net, adapter, loss_fn, ex, cfg, g)
+        loss.backward()
+        host_none.append(host_p.grad is None)
+        opt.step()
+        losses.append(loss.item())
+    spa_grad = sum((p.grad.abs().sum().item() if p.grad is not None else 0.0) for p in adapter.parameters())
+    assert all(map(math.isfinite, losses)) and min(losses[5:]) < losses[0]
+    assert all(host_none) and spa_grad > 0
