@@ -370,9 +370,12 @@ def _normalize_conditions(value) -> list[str]:
     if value is None:
         return ["baseline"]
     conds = [value] if isinstance(value, str) else list(value)
+    # control ablations (dev 06): 'null' = SPA live on the learned null token e∅ (no real prompt);
+    # 'shuffle' = SPA fed a row-permuted prompt (scrambled structure). Both config-gated add-ons.
+    allowed = ("baseline", "spa", "null", "shuffle")
     for c in conds:
-        if c not in ("baseline", "spa"):
-            raise ValueError(f"unknown condition {c!r} (expected 'baseline' or 'spa')")
+        if c not in allowed:
+            raise ValueError(f"unknown condition {c!r} (expected one of {allowed})")
     return conds
 
 
@@ -401,8 +404,11 @@ def _run_once(engine, spec=None) -> list:
 def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     """Generate RFD3 ± SPA designs from a composed config; write PDBs; return :class:`Design` records.
 
-    Iterates ``eval.conditions`` × ``eval.lambda_scale`` (λ applies to ``spa`` only; ``baseline``
-    runs once at λ=0). Each run re-seeds to ``eval.seed`` then rolls out the full sampler for K =
+    Iterates ``eval.conditions`` × ``eval.lambda_scale``. Conditions: ``baseline`` (wrapped-no-prompt
+    ≡ vanilla RFD3, runs once at λ=0); ``spa`` (the real structural prompt); and the control ablations
+    ``null`` (SPA live on the learned null token e∅ — no real prompt) and ``shuffle`` (SPA fed a
+    row-permuted prompt — scrambled structure). ``baseline`` runs once; ``spa``/``null``/``shuffle``
+    sweep λ. Each run re-seeds to ``eval.seed`` then rolls out the full sampler for K =
     ``eval.num_designs`` designs, writing ``{prompt_id}_{condition}_lambda{λ}_{idx}.pdb`` (+ a small
     sidecar ``.json``) under ``eval.out_dir``.
 
@@ -440,15 +446,15 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     # RFD3; spa = motif ⊕ SPA). None ⇒ unconditional (today's path, unchanged). dev 14 §1.
     motif_spec, motif_residues = build_motif(cfg)
 
-    # Resolve + batch the prompt to [K, N, c_kv] once (constant across the diffusion batch) — only if
-    # any 'spa' run is requested.
+    # Resolve + batch the prompt to [K, N, c_kv] once (constant across the diffusion batch). Needed by
+    # 'spa' (real prompt) and 'shuffle' (row-permuted prompt); the 'null'/'baseline' controls need none.
     prompt_batched = None
+    shuffle_batched = None
     prompt_mask = None
-    if "spa" in conditions:
+    if any(c in ("spa", "shuffle") for c in conditions):
         p = resolve_prompt(cfg, device)              # [N, c_kv]
-        prompt_batched = p[None].expand(K, -1, -1).to(device=device, dtype=adapter_dtype).contiguous()
         if motif_residues is not None:               # non-overlap: SPA attends to the scaffold rows only (§2)
-            N = prompt_batched.shape[1]
+            N = p.shape[0]
             contig = str(cfg.eval.motif["contig"])
             L = _contig_length(contig)
             if N != L:                               # review #3/#6: prompt must match the contig design length
@@ -470,14 +476,26 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
             prompt_mask = torch.zeros(K, N, dtype=torch.bool, device=device)
             prompt_mask[:, motif_residues] = True
             print(f"[generate] SPA prompt-mask: {len(motif_residues)} motif rows masked of N={N} (non-overlap).")
+        if "spa" in conditions:
+            prompt_batched = p[None].expand(K, -1, -1).to(device=device, dtype=adapter_dtype).contiguous()
+        if "shuffle" in conditions:                  # control: permute prompt rows ⇒ scrambled structure
+            perm = torch.randperm(p.shape[0], generator=torch.Generator().manual_seed(seed)).to(p.device)
+            shuffle_batched = p[perm][None].expand(K, -1, -1).to(device=device, dtype=adapter_dtype).contiguous()
+            print(f"[generate] SPA prompt-shuffle control: permuted {p.shape[0]} prompt rows (seed {seed}).")
 
     designs: list[Design] = []
     for condition in conditions:
-        run_lambdas = lambdas if condition == "spa" else [0.0]  # baseline ignores λ (clear_prompt)
+        run_lambdas = [0.0] if condition == "baseline" else lambdas  # spa/null/shuffle sweep λ; baseline once
         for lam in run_lambdas:
             if condition == "baseline":
                 adapter.clear_prompt()               # wrappers return base only == vanilla RFD3 (± native motif)
-            else:
+            elif condition == "null":                # control: SPA live on the learned null token e∅ (no real prompt)
+                adapter.set_null_prompt(K)
+                adapter.set_scale(lam)
+            elif condition == "shuffle":             # control: SPA fed the row-permuted (scrambled) prompt
+                adapter.set_prompt(shuffle_batched, key_padding_mask=prompt_mask)
+                adapter.set_scale(lam)
+            else:                                    # spa: the real structural prompt
                 adapter.set_prompt(prompt_batched, key_padding_mask=prompt_mask)
                 adapter.set_scale(lam)
 
