@@ -66,8 +66,14 @@ def _select_conditions(all_conditions: dict, conditioning: str, coupled_motif: b
       cached per-residue prompt stays aligned) and fixed-coordinate (``p_fix_coordinates=1`` ⇒ a true hard
       constraint); sequence stays diffused. SPA then conditions the **non-motif scaffold** (prompt motif
       rows masked, dev ``10`` §7.2).
+    - ``"multigranularity"``: unconditional native denoise (**dev 17** editing curriculum); the SPA
+      prompt is masked to a sampled sub-region S per example (see :meth:`CDDBPromptDataset.__getitem__`).
     """
-    if conditioning == "unconditional":
+    if conditioning in ("unconditional", "multigranularity"):
+        # `multigranularity` (dev 17): RFD3-native conditioning is UNCONDITIONAL (full-structure
+        # denoise, no revealed motif) — the sub-region conditioning is done entirely by SPA, which
+        # sees the full cached prompt masked to a sampled sub-region S (the granularity prompt-mask,
+        # applied in __getitem__). So it shares the unconditional native branch here.
         return {"unconditional": all_conditions["unconditional"]}
     if conditioning in ("island", "mixed"):
         uncond = dict(all_conditions["unconditional"])
@@ -80,7 +86,10 @@ def _select_conditions(all_conditions: dict, conditioning: str, coupled_motif: b
         if coupled_motif:  # swap RFD3's independent island sampler for our coupled total-then-partition
             island["_target_"] = "spa.data.conditions.CoupledIslandCondition"  # bounds = class defaults (dev 10 §7.3)
         return {"unconditional": uncond, "island": island}
-    raise ValueError(f"unknown conditioning={conditioning!r} (use 'unconditional' or 'island'/'mixed')")
+    raise ValueError(
+        f"unknown conditioning={conditioning!r} "
+        "(use 'unconditional', 'island'/'mixed', or 'multigranularity')"
+    )
 
 
 @functools.lru_cache(maxsize=16)
@@ -167,6 +176,8 @@ class CDDBPromptDataset(Dataset):
         self.pdb_dir = cfg.data.pdb_dir
         self.cache_dir = cfg.paths.esm3_cache_dir
         self.length_cap = cfg.data.get("length_cap", None)
+        self.conditioning = cfg.data.get("conditioning", "unconditional")
+        self.granularity = cfg.data.get("granularity", None)  # dev 17: multigranularity knobs
 
         df = pd.read_parquet(os.path.join(cfg.data.splits_root, split, "manifest.parquet"))
         if self.length_cap is not None:
@@ -191,7 +202,8 @@ class CDDBPromptDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         row = self.rows.iloc[idx]
-        out = self.transform(load_structure(row["id"], os.path.join(self.pdb_dir, row["pdb_file"])))
+        pdb_path = os.path.join(self.pdb_dir, row["pdb_file"])
+        out = self.transform(load_structure(row["id"], pdb_path))
 
         coords = out["coord_atom_lvl_to_be_noised"]  # [D, L, 3] clean (augmented), tiled
         D = coords.shape[0]
@@ -205,9 +217,40 @@ class CDDBPromptDataset(Dataset):
             "crd_mask_L": gt["mask_atom_lvl"].bool(),  # bool (lDDT does an in-place bool multiply)
             "is_original_unindexed_token": gt["is_original_unindexed_token"].bool(),
             "prompt": prompt,  # [D, N, 1536]; cache keyed by PDB-file stem (spa.prompt.build_cache)
-            # non-overlap (dev 10 §7.2): mask the native-motif rows so SPA conditions the scaffold only
-            "prompt_mask": self._motif_prompt_mask(out["feats"], prompt.shape[1], D),
+            "prompt_mask": self._prompt_mask(out["feats"], prompt.shape[1], D, pdb_path),
         }
+
+    def _prompt_mask(self, feats, n_prompt: int, D: int, pdb_path: str):
+        """Dispatch the SPA ``[D, N]`` key-padding mask (True = masked) by conditioning mode:
+
+        - ``multigranularity`` (dev 17): mask the **non-S** rows for a per-example sampled sub-region S
+          (editing curriculum — the whole design is conditioned on S; slice-via-mask, ``17`` §4).
+        - otherwise (island / mixed / unconditional): mask the **native-motif** rows so SPA conditions
+          the non-motif scaffold only (non-overlap, dev ``10`` §7.2); ``None`` when there is no motif.
+        """
+        if self.conditioning == "multigranularity":
+            return self._multigranularity_prompt_mask(n_prompt, D, pdb_path)
+        return self._motif_prompt_mask(feats, n_prompt, D)
+
+    def _multigranularity_prompt_mask(self, n_prompt: int, D: int, pdb_path: str):
+        """``[D, N]`` bool key-padding mask (True ⇒ residue ∉ S) for the sampled sub-region S, or
+        ``None`` for the global granularity (attend to all rows). See :mod:`spa.data.granularity`."""
+        import torch as _torch
+
+        from .granularity import subregion_pad_mask
+
+        g = self.granularity
+        kw = {} if g is None else {
+            "weights": g.get("weights", (0.4, 0.4, 0.2)),
+            "min_seg": int(g.get("min_seg", 12)),
+            "contact_thresh": float(g.get("contact_thresh", 8.0)),
+            "min_dom": int(g.get("min_dom", 40)),
+            "domain_score_max": float(g.get("domain_score_max", 0.4)),
+        }
+        _, pad = subregion_pad_mask(n_prompt, pdb_path=pdb_path, **kw)
+        if pad is None:
+            return None
+        return _torch.from_numpy(pad).bool()[None].expand(D, -1).contiguous()
 
     def _load_prompt(self, pdb_stem: str, D: int) -> torch.Tensor:
         p = torch.load(os.path.join(self.cache_dir, f"{pdb_stem}.pt"), weights_only=True).float()  # [N, 1536]

@@ -41,10 +41,29 @@ diffusion_batch_size: null
 # the small local cache (a few structures) suffices. No-op on the full cloud cache. Default off.
 require_cached_prompt: false
 
-# Native RFD3 conditioning curriculum (dev 10 §7): `unconditional` (Run A — SPA-only) or `island`
-# (Run B — motif scaffolding + SPA on the non-motif scaffold, via prompt-row masking). `island`
-# re-enables indexed fixed-coord motifs; the SPA prompt then masks those motif rows (non-overlap).
+# Native RFD3 conditioning curriculum (dev 10 §7 / 17): `unconditional` (Run A — SPA-only), `island`
+# (Run B — motif scaffolding + SPA on the non-motif scaffold, via prompt-row masking), or
+# `multigranularity` (dev 17 editing curriculum — native denoise stays unconditional; SPA conditions
+# on a per-example sampled sub-region S via the `granularity` block below). `island` re-enables indexed
+# fixed-coord motifs; the SPA prompt then masks those motif rows (non-overlap).
 conditioning: unconditional
+
+# Multi-granularity "editing" curriculum knobs (dev 17). ACTIVE ONLY when conditioning=multigranularity;
+# dormant otherwise. Per example, sample a granularity and mask the cached ESM3 prompt to a sub-region S
+# (slice-via-mask, 17 §4) so SPA conditions on S only. This is the EDITING use case — train AND infer on
+# the slice — NOT isolated-motif scaffolding (17 §1 framing lock). N×1536 (variant C, identity projector)
+# ONLY: pooled variants (B/A) mean-pool before attention, so the mask can't restrict the pool — they need
+# mask-aware pooling / true-slice (17 §5, deferred).
+granularity:
+  weights: {global: 0.4, segment: 0.4, domain: 0.2}  # granularity mix (17 §9 default)
+  min_seg: 12          # segment window length ~ U(min_seg, N); floor ~10-15 (17 §9)
+  contact_thresh: 8.0  # domain-split Cα contact threshold, Å (domain_split.py default)
+  min_dom: 40          # domain-split min residues per domain (domain_split.py default)
+  # Accept a 2-domain split as S only if its domain-ness score (cross/weaker-intra contacts; lower =
+  # cleaner) <= this; else fall back to segment. 0.4 CALIBRATED on 834 real ≥80-res CDDB structures:
+  # score p50=0.12 p90=0.35 p95=0.43 (long tail to 1.8 = single-domain/arbitrary cuts); 0.4 keeps ~93%
+  # of scored splits while rejecting the not-cleanly-2-domain tail. Tunable (17 §9 open decision).
+  domain_score_max: 0.4
 
 # Run-B motif sampler (dev 10 §7.3): true = the coupled total-then-partition island sampler
 # (1–5 islands weighted to fewer; total ~10–35% of L, floor 8, cap 50; per-island ≥4 res — bounds
