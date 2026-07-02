@@ -73,7 +73,13 @@ for entry in $VARIANTS; do
       +eval.flywheel.refolder.runner_yaml="$SPA_REPO/configs/of3/of3_triton.yml" \
       +eval.flywheel.refolder.out_dir="$po" \
       eval.out_dir="$po" </dev/null \
-      && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$vname/$id.json" 2>/dev/null && log "  [$vname $n] $id OK -> staged"; } \
+      && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$vname/$id.json" 2>/dev/null; \
+           # Keep the actual design STRUCTURES by DEFAULT (generate.py already wrote
+           # {id}_{cond}_lambda{λ}_{idx}.pdb to out_dir — the compute happened, staging is ~free, and NOT
+           # keeping them was the B4 bug). LEAN_RESULTS=1 opts out (metrics-only) for giant sweeps where
+           # GCS object count matters; it does NOT change the metrics JSON either way.
+           [ "${LEAN_RESULTS:-0}" = "1" ] || gcloud storage cp "$po"/*.pdb "$RESULTS_URI/$vname/$id/" 2>/dev/null; \
+           log "  [$vname $n] $id OK -> staged"; } \
       || log "  [$vname $n] $id FAILED (continuing)"
   done < "$OUT/prompts.tsv"
   log "=== variant $vname done: $ok/$NP staged ==="
