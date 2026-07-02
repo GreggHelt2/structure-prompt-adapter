@@ -81,7 +81,8 @@ def main() -> None:
                  f"(mean-dTM spread {spread:.3f}, within SEM)")
     ax.legend(fontsize=9)
     fig.tight_layout()
-    fig.savefig(args.out, dpi=150)
+    from poster_style import savefig_poster
+    savefig_poster(fig, args.out)  # 300-DPI PNG + vector PDF sibling (poster-ready)
     print(f"[plot] {args.out}  ({len(rows)} folds; means " +
           ", ".join(f"{v} {means[v]:+.3f}" for v in VARIANTS) + f"; spread {spread:.3f})")
 

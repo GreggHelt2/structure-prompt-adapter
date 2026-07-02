@@ -99,7 +99,8 @@ def main() -> None:
 
     fig.suptitle("Big-n H5: hard motif ⊕ soft SPA across 15 held-out folds (adherence)", fontsize=12)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.savefig(args.out, dpi=150)
+    from poster_style import savefig_poster
+    savefig_poster(fig, args.out)  # 300-DPI PNG + vector PDF sibling (poster-ready)
     print(f"[plot] wrote {args.out}  ({len(rows)} prompts)")
 
 

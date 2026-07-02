@@ -92,7 +92,8 @@ def main() -> None:
     ax[0].text(1.02, ax[0].get_ylim()[0] + 0.01, "sweet spot", color="green", fontsize=9)
 
     fig.tight_layout()
-    fig.savefig(args.out, dpi=150)
+    from poster_style import savefig_poster
+    savefig_poster(fig, args.out)  # 300-DPI PNG + vector PDF sibling (poster-ready)
     print(f"[plot] {args.out}")
     print(f"  adherence (mean TM): baseline {adh_m[0.0]:.2f}  λ1 {adh_m[1.0]:.2f}  λ2 {adh_m[2.0]:.2f}")
     print(f"  designable rate:     baseline {des_m[0.0]:.2f}  λ1 {des_m[1.0]:.2f}  λ2 {des_m[2.0]:.2f}")
