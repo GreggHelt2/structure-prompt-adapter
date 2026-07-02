@@ -1,0 +1,37 @@
+# λ×designability sweep eval manifest (dev 13 §7 / 12 §3; pinned 2026-07-01).
+#
+# = the pinned curated-15 (manifest_curated15.yaml) PLUS 2 more held-out irregular folds pulled from
+# the same 50-prompt pool (dev 12 §3 pool #19 A0A7K0RG18, #28 A0A1Q8BPK6), so the fold-dependent
+# adherence↔designability sweet-spot has a real IRREGULAR arm (2 -> 4) instead of 2 anecdotes. The
+# irregular class is where the interesting steering signal lives (A0A820JRM2 dTM +0.49; the "steerable
+# tail", dev 13 §5/§6).
+#
+# This does NOT supersede curated-15: that stays pinned for the completed B1-full + variant-designability
+# runs (docs/results/02 §4/§5) so their provenance is intact. This is a separate artifact for the λ-sweep.
+#
+# All 17 prompts: pinned TEST split (v1_seed0_8-1-1_lenstrat) -> clean by construction (no leakage), ESM3
+# prompts already in esm3_cache.tar (cloud). All <=256 res (A5000-runnable fallback; H100 for the matrix).
+# The 3 anchors (A0A7S1B8G4 / A0A522W419 / A0A820JRM2) are already characterized in docs/results/02 §2 ->
+# the sweep EXTENDS known points. Sorted by length. pdb = <pdb_dir>/AF-<id>-F1-model_v4_esmfold_v1.pdb.
+
+split_id: v1_seed0_8-1-1_lenstrat
+pdb_pattern: "AF-{id}-F1-model_v4_esmfold_v1.pdb"
+
+prompts:
+  - {id: A0A1X7NTP0, len: 52,  fold: all-a,     tags: [smallest]}
+  - {id: A0A6A0D1E8, len: 87,  fold: all-b,     tags: [protect-beta]}
+  - {id: A0A3P5VTL4, len: 88,  fold: all-b,     tags: [protect-beta]}
+  - {id: A0A090ME36, len: 90,  fold: all-b,     tags: [protect-beta]}
+  - {id: A0A7S1B8G4, len: 105, fold: all-b,     tags: [protect-beta, anchor]}   # §2 all-β sweep (λ=1 sweet spot)
+  - {id: A0A820JRM2, len: 110, fold: irregular, tags: [anchor]}                 # ladder, dTM +0.49
+  - {id: A0A6P1U7L6, len: 121, fold: all-b,     tags: [protect-beta]}
+  - {id: A0A7S3EB45, len: 125, fold: all-b,     tags: [protect-beta]}
+  - {id: A0A522W419, len: 150, fold: a-b,       tags: [anchor]}                 # §2/§4/§5 workhorse (λ=2, no cost)
+  - {id: A0A2X2KHU0, len: 151, fold: all-a,     tags: []}
+  - {id: R7VVY2,     len: 160, fold: irregular, tags: []}
+  - {id: A0A7K0RG18, len: 179, fold: irregular, tags: [irregular-arm]}          # pool #19, added 2026-07-01
+  - {id: A0A6J8EPQ1, len: 181, fold: a-b,       tags: []}
+  - {id: A0A7C9GW19, len: 206, fold: all-a,     tags: []}
+  - {id: H1SDK8,     len: 210, fold: a-b,       tags: []}
+  - {id: A0A1Q8BPK6, len: 227, fold: irregular, tags: [irregular-arm]}          # pool #28, added 2026-07-01
+  - {id: A0A1X0IID6, len: 247, fold: a-b,       tags: []}
