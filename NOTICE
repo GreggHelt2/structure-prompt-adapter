@@ -1,0 +1,43 @@
+Structure Prompt Adapter (SPA)
+Copyright 2026 Gregg Helt
+
+Licensed under the Apache License, Version 2.0 (the "License"); see the LICENSE
+file. This license covers both the SPA source code and the released SPA model
+(adapter) weights.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+SPA depends on, is validated with, or was trained using the works below. Each is
+used under its own license (all permissive or CC-BY-4.0). SPA does not vendor or
+redistribute their source code; dependencies are installed separately.
+
+Runtime host and prompt encoder
+  - RFdiffusion3 / foundry — BSD 3-Clause
+      Copyright (c) 2025, Institute for Protein Design, University of Washington
+  - AtomWorks — BSD 3-Clause
+      Copyright (c) 2025, Institute for Protein Design, University of Washington
+  - ESM3 (esm3-sm-open-v1) — MIT
+      Copyright 2026 Chan Zuckerberg Biohub, Inc. (formerly EvolutionaryScale)
+
+Downstream validation (not included in the released model)
+  - ProteinMPNN — MIT — Copyright (c) 2022 Justas Dauparas et al.
+  - OpenFold3 — Apache License 2.0 — the OpenFold / aQ Laboratory contributors
+
+Encoder for the 1x32 variant only
+  - CLSS — Apache License 2.0 / MIT — Guy Yanai et al.
+
+Architectural inspiration (no source code included)
+  - IP-Adapter — Apache License 2.0 — Tencent AI Lab
+
+Training data
+  - Consistency-Distilled Synthetic Protein Database (CDDB) / Proteina-Atomistica
+    dataset — Creative Commons Attribution 4.0 International (CC-BY-4.0) — NVIDIA.
+      Reidenbach et al., "Consistent Synthetic Sequences Unlock Structural
+      Diversity in Fully Atomistic De Novo Protein Design," 2025 (arXiv:2512.01976).
+      Derived from AlphaFold DB cluster representatives.
+      https://creativecommons.org/licenses/by/4.0/
+    The released SPA model weights are Adapted Material of this CC-BY-4.0 dataset;
+    this attribution is provided in satisfaction of CC-BY-4.0 Section 3.
+
+No warranty is provided. See the LICENSE file for the full terms.
