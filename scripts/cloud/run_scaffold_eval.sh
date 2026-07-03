@@ -53,9 +53,13 @@ for p in json.load(open('$MAN'))['prompts']:
 NW=$(wc -l < "$OUT/work.tsv")
 log "scaffolding big-run: $NW (prompt×gran) units, grans=$GRANS, K=$K N=$NSEQ λ=$LAM; multigran vs base"
 
-# ckpt-group entries: "tag:ckpt-file:conditions". multigran runs baseline+spa (baseline is ckpt-independent,
-# scored once per unit); base runs spa only (its baseline == multigran's baseline).
-GROUPS="multigran:/workspace/weights/spa_multigran.pt:[baseline,spa] base:/workspace/weights/spa_base.pt:[spa]"
+# ckpt-groups as PARALLEL ARRAYS (not a space-split string): the conds contain glob brackets
+# `[baseline,spa]`/`[spa]`, so an unquoted `for x in $STR` would pathname-expand them into garbage.
+# Arrays with quoted access never word-split or glob. multigran runs baseline+spa (baseline is
+# ckpt-independent, scored once per unit); base runs spa only (== multigran's baseline).
+G_TAGS=(multigran base)
+G_CKPTS=(/workspace/weights/spa_multigran.pt /workspace/weights/spa_base.pt)
+G_CONDS=('[baseline,spa]' '[spa]')
 
 run_one(){  # $1=tag $2=ckpt $3=conds $4=id $5=len $6=gran $7=start $8=end
   local tag="$1" ckpt="$2" conds="$3" id="$4" len="$5" gran="$6" s="$7" e="$8"
@@ -81,8 +85,8 @@ run_one(){  # $1=tag $2=ckpt $3=conds $4=id $5=len $6=gran $7=start $8=end
     || log "  [$tag] $id/$gran FAILED (continuing)"
 }
 
-for entry in $GROUPS; do
-  tag="${entry%%:*}"; rest="${entry#*:}"; ckpt="${rest%%:*}"; conds="${rest#*:}"
+for gi in "${!G_TAGS[@]}"; do
+  tag="${G_TAGS[$gi]}"; ckpt="${G_CKPTS[$gi]}"; conds="${G_CONDS[$gi]}"
   log "=== ckpt-group $tag ($ckpt) conds=$conds ==="
   n=0
   while IFS=$'\t' read -r id len gran s e; do
