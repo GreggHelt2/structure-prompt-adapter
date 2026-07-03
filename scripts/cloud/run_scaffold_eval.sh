@@ -81,10 +81,11 @@ run_one(){  # $1=tag $2=ckpt $3=conds $4=id $5=len $6=gran $7=start $8=end
     eval.out_dir="$po" </dev/null \
     && { gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$tag/$gran/$id.json" 2>/dev/null; \
          [ "${LEAN_RESULTS:-0}" = "1" ] || gcloud storage cp "$po"/*.pdb "$RESULTS_URI/$tag/$gran/$id/" 2>/dev/null; \
-         log "  [$tag] $id/$gran OK -> staged"; } \
+         OK=$((OK+1)); log "  [$tag] $id/$gran OK -> staged"; } \
     || log "  [$tag] $id/$gran FAILED (continuing)"
 }
 
+OK=0
 for gi in "${!G_TAGS[@]}"; do
   tag="${G_TAGS[$gi]}"; ckpt="${G_CKPTS[$gi]}"; conds="${G_CONDS[$gi]}"
   log "=== ckpt-group $tag ($ckpt) conds=$conds ==="
@@ -94,4 +95,7 @@ for gi in "${!G_TAGS[@]}"; do
     run_one "$tag" "$ckpt" "$conds" "$id" "$len" "$gran" "$s" "$e"
   done < "$OUT/work.tsv"
 done
-log "===== SCAFFOLDING BIG-RUN DONE -> $RESULTS_URI ====="
+TOTAL=$(( NW * ${#G_TAGS[@]} ))
+log "===== SCAFFOLDING BIG-RUN DONE: $OK/$TOTAL units staged -> $RESULTS_URI ====="
+# Fail LOUDLY if nothing staged (else Vertex reports a vacuous SUCCEEDED, as the glob bug did).
+[ "$OK" -gt 0 ] || { log "FATAL: 0/$TOTAL units staged — every flywheel call failed (see errors above)."; exit 1; }
