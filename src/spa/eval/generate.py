@@ -91,6 +91,10 @@ def build_eval_engine(cfg):
             specification=spec,
             inference_sampler=sampler,
             seed=int(ev.get("seed", 0)),
+            # OPT-IN trajectory dump (feature-flagged, default off; dev prototype). When
+            # +eval.dump_trajectory=true, the engine builds per-step AtomArrayStacks onto each
+            # RFD3Output (see generate() for the multi-MODEL PDB write). Off => byte-identical.
+            dump_trajectories=bool(ev.get("dump_trajectory", False)),
         )
     )
     engine.initialize()
@@ -581,6 +585,22 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
                                 idx=idx, path=path, n_residues=n_res, atom_array=aa)
                 _write_sidecar(path, design, cfg, getattr(rfd3_out, "metadata", None))
                 designs.append(design)
+                # OPT-IN per-step trajectory dump (feature-flagged, default off; dev prototype).
+                # When +eval.dump_trajectory=true the engine attaches per-step AtomArrayStacks to the
+                # RFD3Output; persist each as a multi-MODEL PDB alongside the design. NOTE: the foundry
+                # engine (engine.py:306-309) CROSSES the two field labels, so we dump both series under
+                # their RAW field names — pick the "clean refining" one by CONTENT downstream, not name.
+                if bool(ev.get("dump_trajectory", False)):
+                    from biotite.structure.io.pdb import PDBFile as _PDBFile
+                    for _field in ("denoised_trajectory_stack", "noisy_trajectory_stack"):
+                        _stack = getattr(rfd3_out, _field, None)
+                        if _stack is None:
+                            continue
+                        _tp = path.with_name(f"{path.stem}_traj_{_field.split('_')[0]}.pdb")
+                        _pf = _PDBFile()
+                        _pf.set_structure(_stack)
+                        _pf.write(str(_tp))
+                        print(f"[generate] trajectory[{_field}]: {len(_stack)} frames -> {_tp}")
             print(f"[generate] {condition} λ={_fmt_lambda(lam_label)} -> {len(output_list)} design(s)")
 
     print(f"[generate] wrote {len(designs)} design(s) to {out_dir}")
