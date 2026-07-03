@@ -1,4 +1,4 @@
-"""Structural 'money shot' — superpose RFD3±SPA designs onto the target fold (3D Cα trace, matplotlib).
+"""Structural 'headliner' — superpose RFD3±SPA designs onto the target fold (3D Cα trace, matplotlib).
 
 Per prompt: auto-pick a representative (median-TM) **baseline** design and the best-TM **SPA** design from
 the flywheel scores, TM-align each onto the target structure, and render 3D Cα traces (target in gray +

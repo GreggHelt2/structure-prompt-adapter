@@ -1,4 +1,4 @@
-"""Poster panel 3b — a montage of the hard⊕soft structural money-shots (baseline vs SPA on the target).
+"""Poster panel 3b — a montage of the hard⊕soft structural headliners (baseline vs SPA on the target).
 
 Composites the two rendered PyMOL cartoons into one labeled figure. Each input cartoon is already a
 2-panel image — baseline (red) | SPA (blue), both superposed on the gray target fold — so this stacks
@@ -14,7 +14,7 @@ import argparse
 from pathlib import Path
 
 DEFAULT_FIGDIR = "outputs/eval/figures"
-# (cartoon filename, row caption) — the two locked hard⊕soft money-shots.
+# (cartoon filename, row caption) — the two locked hard⊕soft headliners.
 ROWS = [
     ("cartoon_hardsoft_A0A522W419_helixstrand.png", "α/β · A0A522W419 · helixstrand motif · TM 0.38 → 0.74"),
     ("cartoon_hardsoft_A0A7S3EB45_beta.png", "all-β · A0A7S3EB45 · 2-strand motif · TM 0.27 → 0.80"),
@@ -47,7 +47,7 @@ def main() -> None:
     fig.text(0.5, 0.945,
              "baseline (no SPA) —— with SPA —— superposed on the target fold (gray);  the hard motif stays pinned",
              ha="center", fontsize=10.5, color="#555")
-    fig.suptitle("Hard ⊕ soft money-shots: SPA recovers the target fold",
+    fig.suptitle("Hard ⊕ soft headliners: SPA recovers the target fold",
                  fontsize=15, fontweight="bold", y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.925])
     savefig_poster(fig, args.out)
