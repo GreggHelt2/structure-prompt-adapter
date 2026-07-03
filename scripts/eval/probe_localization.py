@@ -116,7 +116,7 @@ def _build_profile(L, b, kind, feather_w):
 # --------------------------------------------------------------------------------------------------
 
 
-def _examples(frame, foreign, hosts, fixed_len, pdb_dir, nca):
+def _examples(frame, foreign, hosts, fixed_len, pdb_dir, nca, ratios=None):
     """Build the (name, L, b, foreign_id) example list for a frame. b = S/F boundary (S=[0,b), F=[b,L))."""
     ex = []
     if frame == "balanced":
@@ -126,6 +126,15 @@ def _examples(frame, foreign, hosts, fixed_len, pdb_dir, nca):
     elif frame == "fixed_l":
         for g in foreign:
             ex.append({"name": f"fix_{g}", "L": int(fixed_len), "b": int(fixed_len) // 2, "G": g})
+    elif frame == "ratio_sweep":
+        # ISOLATION probe (dev discussion 2026-07-02): sweep the S:F ratio at FIXED L on an ARBITRARY
+        # (non-domain) mid-fold split. If F-drag/S-steer drops as S shrinks, "small S localizes better"
+        # is a RATIO effect independent of any domain boundary (disentangles host_domain's confound).
+        L = int(fixed_len)
+        for g in foreign:
+            for r in (ratios or [0.15, 0.3, 0.5, 0.7]):
+                b = min(max(12, round(float(r) * L)), L - 12)   # keep both S and F >= 12 residues
+                ex.append({"name": f"r{float(r):g}_{g}", "L": L, "b": int(b), "G": g, "ratio": float(r)})
     elif frame == "host_domain":
         from spa.data.granularity import detect_two_domains
 
@@ -276,7 +285,7 @@ def _mean(rows, key, cond=None):
 def _summarize(ex, rows, lambdas):
     """Per example: free anchors + per-λ S-steer / F-drag / F-disp / loc-index."""
     free_S = _mean(rows, "tm_S", "free"); free_F = _mean(rows, "tm_F", "free")
-    out = {"name": ex["name"], "L": ex["L"], "b": ex["b"], "G": ex["G"],
+    out = {"name": ex["name"], "L": ex["L"], "b": ex["b"], "G": ex["G"], "ratio": ex.get("ratio"),
            "free_S->G": free_S, "free_F->G": free_F, "lambdas": {}}
     for lam in lambdas:
         loc, glob = f"localized_l{lam:g}", f"global_l{lam:g}"
@@ -318,6 +327,30 @@ def _print_frame(frame, summ, lambdas):
               f"{f(m['F_ceiling']):>9}{g(m['loc_index']):>9}{g(m['F_disp']):>9}")
 
 
+def _print_ratio_trend(summ, lambdas):
+    """For the ratio_sweep frame: aggregate by S:F ratio to ISOLATE 'small S localizes better' from any
+    domain-boundary effect (these splits are arbitrary). drag/steer ↓ and loc-idx ↑ as S/L ↓ ⇒ the
+    asymmetric-S mechanism is real and boundary-independent."""
+    f = lambda x: "n/a" if x is None else f"{x:+.3f}"
+    g = lambda x: "n/a" if x is None else f"{x:.3f}"
+    ratios = sorted({s["ratio"] for s in summ if s.get("ratio") is not None})
+    print(f"\n{'='*80}\nRATIO-ISOLATION TREND — does localization improve as S shrinks? (arbitrary split)\n{'='*80}")
+    for lam in lambdas:
+        print(f"\n  λ={lam:g}   (want: drag/steer ↓ and loc-idx ↑ as S/L ↓)")
+        hdr = f"  {'S/L':>6}{'n':>4}{'S-steer':>9}{'F-drag':>9}{'drag/steer':>11}{'loc-idx':>9}"
+        print(hdr); print("  " + "-" * (len(hdr) - 2))
+        for r in ratios:
+            ds = [s["lambdas"][f"{lam:g}"] for s in summ if s.get("ratio") == r]
+            ss = [d["S_steer"] for d in ds if d["S_steer"] is not None]
+            fd = [d["F_drag"] for d in ds if d["F_drag"] is not None]
+            li = [d["loc_index"] for d in ds if d["loc_index"] is not None]
+            ms = (sum(ss) / len(ss)) if ss else None
+            mf = (sum(fd) / len(fd)) if fd else None
+            ratio_ds = (mf / ms) if (ms and mf is not None and ms != 0) else None
+            ml = (sum(li) / len(li)) if li else None
+            print(f"  {r:>6.2f}{len(ds):>4}{f(ms):>9}{f(mf):>9}{g(ratio_ds):>11}{g(ml):>9}")
+
+
 # --------------------------------------------------------------------------------------------------
 
 
@@ -328,6 +361,7 @@ def main():
     ap.add_argument("--hosts", default="", help="comma ids for the host_domain frame (2-domain structures)")
     ap.add_argument("--frames", default="balanced,fixed_l,host_domain")
     ap.add_argument("--fixed-len", type=int, default=200)
+    ap.add_argument("--ratios", default="0.15,0.3,0.5,0.7", help="S:F ratios for the ratio_sweep frame")
     ap.add_argument("--lambdas", default="1,2")
     ap.add_argument("--num-designs", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
@@ -341,6 +375,7 @@ def main():
     foreign = [s.strip() for s in args.foreign.split(",") if s.strip()]
     hosts = [s.strip() for s in args.hosts.split(",") if s.strip()]
     frames = [s.strip() for s in args.frames.split(",") if s.strip()]
+    ratios = [float(x) for x in args.ratios.split(",") if x.strip()]
     lambdas = [float(x) for x in args.lambdas.split(",") if x.strip()]
     out_dir = Path(args.out_dir).expanduser().resolve(); out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -354,7 +389,7 @@ def main():
 
     results = {"config": vars(args), "frames": {}}
     for frame in frames:
-        exs = _examples(frame, foreign, hosts, args.fixed_len, args.pdb_dir, nca)
+        exs = _examples(frame, foreign, hosts, args.fixed_len, args.pdb_dir, nca, ratios)
         exs = [e for e in exs if e["L"] <= 320]   # A5000 sanity cap (no OF3 here, so a bit past 256 is ok)
         print(f"\n[loc] frame={frame}: {len(exs)} example(s): "
               + ", ".join(f"{e['name']}(L={e['L']},b={e['b']})" for e in exs))
@@ -364,6 +399,8 @@ def main():
                                 args.seed, args.num_timesteps, args.feather, out_dir, args.device, nca_G[ex["G"]])
             summ.append(_summarize(ex, rows, lambdas))
         _print_frame(frame, summ, lambdas)
+        if frame == "ratio_sweep":
+            _print_ratio_trend(summ, lambdas)
         results["frames"][frame] = summ
 
     (out_dir / "localization_results.json").write_text(json.dumps(results, indent=2, default=str))
