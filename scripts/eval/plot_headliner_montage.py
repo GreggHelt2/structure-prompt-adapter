@@ -4,8 +4,8 @@ Composites the two rendered PyMOL cartoons into one labeled figure. Each input c
 2-panel image — baseline (red) | SPA (blue), both superposed on the gray target fold — so this stacks
 the α/β and all-β examples with per-row captions. Run after the cartoons have been rendered.
 
-    conda run -n spa-dev python scripts/eval/plot_moneyshot_montage.py \
-        --out outputs/eval/figures/moneyshot_montage.png
+    conda run -n spa-dev python scripts/eval/plot_headliner_montage.py \
+        --out outputs/eval/figures/headliner_montage.png
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ ROWS = [
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--figdir", default=DEFAULT_FIGDIR)
-    ap.add_argument("--out", default=f"{DEFAULT_FIGDIR}/moneyshot_montage.png")
+    ap.add_argument("--out", default=f"{DEFAULT_FIGDIR}/headliner_montage.png")
     args = ap.parse_args()
 
     import matplotlib
