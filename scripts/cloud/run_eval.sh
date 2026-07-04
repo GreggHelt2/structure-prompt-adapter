@@ -14,7 +14,7 @@ RFD3_CKPT_URI="${RFD3_CKPT_URI:-$BUCKET/weights/rfd3_latest.ckpt}"
 OF3_CKPT_URI="${OF3_CKPT_URI:-$BUCKET/weights/of3-p2-155k.pt}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 MPNN_REPO="${MPNN_REPO:-/opt/ProteinMPNN}"
-NUM_TIMESTEPS="${NUM_TIMESTEPS:-}"   # empty -> flywheel default (RFD3 engine default 200)
+NUM_TIMESTEPS="${NUM_TIMESTEPS:-}"   # empty -> effective RFD3 default 100 (rfd3 edm.yaml; NOT the 200 its docs claim; see dev 07 I.10). set to 200 to match the paper's benchmark.
 PREP=/workspace/prep
 OUT=/workspace/b1_out
 

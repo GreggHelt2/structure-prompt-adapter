@@ -2,7 +2,8 @@
 
 Spec: dev ``05_validation_pipeline.md`` §1–§2 ("Stage 0 — Generate (RFD3 ± SPA)") and the
 identity-gate invariant of dev ``02``/``03`` (wrapped-no-prompt == vanilla RFD3). This is the
-**inference** path — RFD3's real 200-step diffusion sampler (``RFD3InferenceEngine.run``), NOT the
+**inference** path — RFD3's real multi-step diffusion sampler (``RFD3InferenceEngine.run``; 100-step
+default per the rfd3 ``edm.yaml``, NOT the 200 its docs claim — see dev ``07`` I.10), NOT the
 single training forward the harness uses.
 
 How generation is driven (vs the training harness):
@@ -72,7 +73,7 @@ def build_eval_engine(cfg):
 
     Mirrors ``harness.build_engine`` but reads the ``eval`` group: ``num_designs`` becomes the
     diffusion batch (== K designs/run), ``length``/``specification`` set the design spec, and
-    ``num_timesteps`` (if given) overrides the 200-step sampler — the run-time cost knob.
+    ``num_timesteps`` (if given) overrides the sampler's 100-step default (rfd3 ``edm.yaml``) — the run-time cost knob.
     """
     from rfd3.engine import RFD3InferenceConfig, RFD3InferenceEngine
 

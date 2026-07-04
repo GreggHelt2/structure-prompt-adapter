@@ -6,7 +6,8 @@ lambda_scale: 1.0          # SPA strength λ; float or list (swept for spa only;
 num_designs: 8             # K designs per (condition, λ) — the RFD3 diffusion batch (one engine.run -> K backbones)
 length: 100                # design length (residues) for unconditional generation
 specification: null        # optional RFD3 DesignInputSpecification dict (augments/overrides `length`)
-num_timesteps: null        # RFD3 sampler steps (null -> engine default 200; lower = faster/cheaper)
+num_timesteps: null        # RFD3 sampler steps (null -> effective default 100 from rfd3 edm.yaml, NOT the 200 its
+                           #   docs/dataclass claim; verified 2026-07-03; set e.g. 200 to override. lower = faster/cheaper)
 seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
 ladder: null               # checkpoint-step ADHERENCE LADDER (scripts/eval/ladder_sweep.py, dev 13): list of
                            #   snapshot paths to sweep (adherence vs training step). null -> not a ladder run.
