@@ -206,8 +206,12 @@ def _precompute_prompt(target_pdb, strip, device, out_dir):
     return out
 
 
-def _rfd3_ckpt():
-    return str(Path.home() / "projects/spa/models/rfdiffusion3/rfd3_latest.ckpt")
+def _rfd3_ckpt(override=None):
+    """RFD3 frozen ckpt path: explicit ``override`` → ``$RFD3_CKPT`` → local default (cloud-portable)."""
+    import os
+
+    return str(override or os.environ.get("RFD3_CKPT")
+               or (Path.home() / "projects/spa/models/rfdiffusion3/rfd3_latest.ckpt"))
 
 
 # --------------------------------------------------------------------------------------------------
@@ -308,7 +312,7 @@ def run_grid(args):
     for layout in layouts:
         contig, order = build_contig(args.motif_seg, args.u_len, args.c_len, layout)
         cfg = OmegaConf.create({
-            "paths": {"rfd3_ckpt": _rfd3_ckpt()},
+            "paths": {"rfd3_ckpt": _rfd3_ckpt(getattr(args, "rfd3_ckpt", None))},
             "hardware": {"device": device},
             "model": base_model, "variant": base_variant,
             "eval": {"num_designs": K, "length": None, "specification": None,
@@ -416,6 +420,7 @@ def _print_grid(grid, lambdas):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ckpt", default=DEFAULT_CKPT, help="N×1536 multigranularity SPA checkpoint (variant C)")
+    ap.add_argument("--rfd3-ckpt", default=None, help="RFD3 frozen ckpt (default: $RFD3_CKPT or local models/); cloud-portable")
     ap.add_argument("--motif-source", default="A0A2X2KHU0", help="CDDB uniprot id or PDB path for the hard motif M")
     ap.add_argument("--motif-seg", default="A2-20", help="contig motif segment (chain-prefixed author range), e.g. A2-20")
     ap.add_argument("--target", default="A0A090ME36", help="foreign fold G (CDDB uniprot id or PDB path) U steers toward")

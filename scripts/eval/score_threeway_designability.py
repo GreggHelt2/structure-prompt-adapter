@@ -28,6 +28,12 @@ def main():
         ROOT / "training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb/"
                "AF-A0A2X2KHU0-F1-model_v4_esmfold_v1.pdb"))
     ap.add_argument("--num-seqs", type=int, default=8, help="ProteinMPNN sequences per backbone (best-of-K)")
+    # Cloud-portability overrides (default: $ENV → local); on the H100: /opt/ProteinMPNN,
+    # /workspace/weights/of3-p2-155k.pt, configs/of3/of3_triton.yml.
+    ap.add_argument("--proteinmpnn-repo", default=None, help="ProteinMPNN repo (default: $PROTEINMPNN_REPO or local)")
+    ap.add_argument("--of3-ckpt", default=None, help="OpenFold3 ckpt (default: $OF3_CKPT or local)")
+    ap.add_argument("--of3-runner-yaml", default=None, help="OF3 runner yaml (default: $OF3_RUNNER_YAML or local of3_nokernel.yml)")
+    ap.add_argument("--of3-conda-env", default="spa-verify-of3", help="conda env hosting OpenFold3 (same local + cloud)")
     ap.add_argument("--out-dir", default=str(ROOT / "structure-prompt-adapter/outputs/eval/threeway_designability"))
     args = ap.parse_args()
 
@@ -37,12 +43,16 @@ def main():
     from spa.eval.proteinmpnn import inverse_fold
     from spa.eval.score import _as_struct, _ca_array, score_design, source_positions
 
+    import os
+    _p = lambda ov, env, dflt: str(ov or os.environ.get(env) or dflt)
+
     out_dir = Path(args.out_dir).expanduser().resolve(); out_dir.mkdir(parents=True, exist_ok=True)
     cfg = OmegaConf.create({
         "paths": {
-            "proteinmpnn_repo": str(ROOT / "needed_repos/ProteinMPNN"),
-            "openfold3_ckpt": str(ROOT / "models/openfold3/of3-p2-155k.pt"),
-            "openfold3_runner_yaml": str(ROOT / "structure-prompt-adapter/configs/of3/of3_nokernel.yml"),
+            "proteinmpnn_repo": _p(args.proteinmpnn_repo, "PROTEINMPNN_REPO", ROOT / "needed_repos/ProteinMPNN"),
+            "openfold3_ckpt": _p(args.of3_ckpt, "OF3_CKPT", ROOT / "models/openfold3/of3-p2-155k.pt"),
+            "openfold3_runner_yaml": _p(args.of3_runner_yaml, "OF3_RUNNER_YAML",
+                                        ROOT / "structure-prompt-adapter/configs/of3/of3_nokernel.yml"),
         },
         "eval": {
             "out_dir": str(out_dir),
@@ -74,7 +84,7 @@ def main():
     seqsets = inverse_fold(cfg, designs=designs)
     # Stage 3 — OpenFold3 refold (separate env, one model-load for the whole matrix)
     refolder = OF3Refolder(ckpt_path=cfg.paths.openfold3_ckpt, runner_yaml=cfg.paths.openfold3_runner_yaml,
-                           out_dir=str(out_dir / "of3"), conda_env="spa-verify-of3")
+                           out_dir=str(out_dir / "of3"), conda_env=args.of3_conda_env)
     refolds_by_name = refolder.refold_all([ss for ss in seqsets if ss is not None])
 
     # Stage 4 — score (designability scRMSD + refold-side motif survival)
