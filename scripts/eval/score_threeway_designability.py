@@ -27,7 +27,12 @@ def main():
     ap.add_argument("--motif-source", default=str(
         ROOT / "training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb/"
                "AF-A0A2X2KHU0-F1-model_v4_esmfold_v1.pdb"))
-    ap.add_argument("--num-seqs", type=int, default=8, help="ProteinMPNN sequences per backbone (best-of-K)")
+    ap.add_argument("--num-seqs", type=int, default=16,
+                    help="ProteinMPNN sequences per backbone (best-of-K). N>=16 halves the best-of-N miss-rate "
+                         "for hard backbones (dev 21 §4.1 best-of-N-noise finding)")
+    ap.add_argument("--proteinmpnn-seed", type=int, default=42,
+                    help="ProteinMPNN sampling seed — FIXED nonzero for reproducibility (--seed 0 = RANDOM "
+                         "each run in ProteinMPNN, which made best-of-N non-reproducible; dev 21 §4.1)")
     # Cloud-portability overrides (default: $ENV → local); on the H100: /opt/ProteinMPNN,
     # /workspace/weights/of3-p2-155k.pt, configs/of3/of3_triton.yml.
     ap.add_argument("--proteinmpnn-repo", default=None, help="ProteinMPNN repo (default: $PROTEINMPNN_REPO or local)")
@@ -57,6 +62,7 @@ def main():
         "eval": {
             "out_dir": str(out_dir),
             "proteinmpnn": {"num_seqs": int(args.num_seqs), "sampling_temp": 0.1, "batch_size": 1,
+                            "seed": int(args.proteinmpnn_seed),   # FIXED nonzero (0 = random in ProteinMPNN)
                             "model_name": "v_48_020", "weights_dir": None,
                             "designs": None, "design_dir": None, "out_dir": str(out_dir / "seqs")},
             "score": {"scrmsd_cutoff": 2.0, "plddt_cutoff": 80.0, "diversity": False},
