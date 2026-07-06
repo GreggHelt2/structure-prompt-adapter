@@ -75,6 +75,7 @@ class OF3Refolder:
         structure_format: str = "cif",
         cuda_visible_devices: str | None = None,
         use_msa_server: bool = False,
+        batch_patch_shim: str | None = None,
     ) -> None:
         self.ckpt_path = str(ckpt_path)
         self.runner_yaml = str(runner_yaml)
@@ -85,6 +86,10 @@ class OF3Refolder:
         self.structure_format = str(structure_format)
         self.cuda_visible_devices = cuda_visible_devices
         self.use_msa_server = bool(use_msa_server)
+        # When set, run OF3 via `python <shim> predict …` instead of the bare `run_openfold` console
+        # script — the shim monkeypatches OF3's 3 bs=1 guards so a runner-yaml with
+        # data_module_args.batch_size>1 works for same-length batches (dev 23; scripts/eval/of3_batch_patch.py).
+        self.batch_patch_shim = str(batch_patch_shim) if batch_patch_shim else None
 
     # ----------------------------------------------------------------------------------------------
     # Query JSON + command assembly + output-path reconstruction
@@ -101,8 +106,9 @@ class OF3Refolder:
         return {"queries": {f"q{i}": self._chain(s) for i, s in enumerate(sequences)}}
 
     def _build_command(self, query_json: Path, run_dir: Path) -> list[str]:
-        cmd = [
-            "run_openfold", "predict",
+        head = ["python", self.batch_patch_shim] if self.batch_patch_shim else ["run_openfold"]
+        cmd = head + [
+            "predict",
             "--query-json", str(query_json),
             "--output-dir", str(run_dir),
             "--inference-ckpt-path", self.ckpt_path,

@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--of3-runner-yaml", default=None, help="BASE runner-yaml (batch_size gets injected per run)")
     ap.add_argument("--proteinmpnn-repo", default=None)
     ap.add_argument("--of3-conda-env", default="spa-verify-of3")
+    ap.add_argument("--batch-patch-shim", default=None,
+                    help="of3_batch_patch.py (applied only for bs>1; default $OF3_BATCH_SHIM or repo path)")
     ap.add_argument("--out-dir", default=str(ROOT / "structure-prompt-adapter/outputs/eval/of3_batch_bench"))
     args = ap.parse_args()
 
@@ -62,7 +64,10 @@ def main():
         y = OmegaConf.create(OmegaConf.to_container(base, resolve=False))
         y["data_module_args"] = {**dict(y.get("data_module_args") or {}), "batch_size": int(B)}
         yf = out / f"runner_bs{B}.yml"; OmegaConf.save(y, yf)
-        rf = OF3Refolder(ckpt_path=of3_ckpt, runner_yaml=str(yf), out_dir=str(out / f"bs{B}"), conda_env=args.of3_conda_env)
+        bp = (_p(args.batch_patch_shim, "OF3_BATCH_SHIM",
+                 ROOT / "structure-prompt-adapter/scripts/eval/of3_batch_patch.py")) if B > 1 else None
+        rf = OF3Refolder(ckpt_path=of3_ckpt, runner_yaml=str(yf), out_dir=str(out / f"bs{B}"),
+                         conda_env=args.of3_conda_env, batch_patch_shim=bp)
         t0 = time.time(); folds = rf.refold_all([ss]); dt = time.time() - t0
         cifs = folds.get(ss.name, [])
         sc = sorted(scrmsd(c) for c in cifs)

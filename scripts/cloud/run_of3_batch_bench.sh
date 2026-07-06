@@ -27,6 +27,7 @@ gcloud storage cp "$PREP_URI/*" "$PREP/" 2>/dev/null || gcloud storage cp -r "$P
 export OF3_CKPT=/workspace/weights/of3-p2-155k.pt
 export OF3_RUNNER_YAML="$SPA_REPO/configs/of3/of3_triton.yml"
 export PROTEINMPNN_REPO="$MPNN_REPO"
+export OF3_BATCH_SHIM="$SPA_REPO/scripts/eval/of3_batch_patch.py"   # bs>1 monkeypatch (dev 23)
 
 log "OF3 batch bench: design=$DESIGN_ID N=$N_SEQS batch_sizes=$BATCH_SIZES"
 python "$SPA_REPO/scripts/eval/bench_of3_batch.py" \
