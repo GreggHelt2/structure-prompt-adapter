@@ -72,6 +72,9 @@ add_env LEAN_RESULTS "${LEAN_RESULTS:-}"
 add_env DESIGN_ID "${DESIGN_ID:-}"
 add_env N_SEQS "${N_SEQS:-}"
 add_env BATCH_SIZES "${BATCH_SIZES:-}"
+# OF3 attention kernel: triton (default, Hopper perf, but its Evoformer kernel asserts bs=1 — evoformer.py:915)
+# vs nokernel (stock attention, the A5000-verified batched path). Set KERNEL=nokernel to batch bs>1. dev 23 §7.
+add_env KERNEL "${KERNEL:-}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;
