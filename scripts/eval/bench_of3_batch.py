@@ -1,8 +1,10 @@
 """Measure OF3 BATCHED-inference speedup + validate equivalence (dev 23; subagent finding: OF3's inference
 is already batch-aware — `data_module_args.batch_size>1` in the runner-yaml folds same-length queries in
 ONE forward, no fork). Fold N same-length ProteinMPNN sequences (one backbone) at batch_size ∈ {1,8,16};
-report wall-clock speedup vs bs=1 AND the scRMSD-to-design distribution per bs (should MATCH if batching
-is numerically equivalent). Our designability seqs are same-length ⇒ clean collation (the ideal case).
+report wall-clock speedup vs bs=1 AND the scRMSD-to-design distribution per bs (should be equivalent IN
+AGGREGATE — best-of-K + designable-rate — though NOT bit-identical per sample; see of3_batch_patch.py
+"Equivalence"). NB: same-LENGTH seqs are still RAGGED at the ATOM level (sidechains differ), which is
+exactly the case of3_batch_patch.py exists to handle — bs>1 needs that shim (auto-applied for B>1).
 
     conda run -n spa-dev python scripts/eval/bench_of3_batch.py --design <pdb> --n-seqs 16 --batch-sizes 1,8,16
 """
