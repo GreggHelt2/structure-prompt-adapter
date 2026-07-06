@@ -39,6 +39,10 @@ def main():
     ap.add_argument("--of3-ckpt", default=None, help="OpenFold3 ckpt (default: $OF3_CKPT or local)")
     ap.add_argument("--of3-runner-yaml", default=None, help="OF3 runner yaml (default: $OF3_RUNNER_YAML or local of3_nokernel.yml)")
     ap.add_argument("--of3-conda-env", default="spa-verify-of3", help="conda env hosting OpenFold3 (same local + cloud)")
+    ap.add_argument("--of3-batch-size", type=int, default=1,
+                    help="OF3 refold batch_size. >1 forces the of3_nokernel.yml base + the of3_batch_patch.py "
+                         "shim (the triton kernels CANNOT batch — evoformer.py:915); ~2.5x at bs=8, folds "
+                         "equivalent (dev 23 §7.8). bs=1 = original per-fold behavior, unchanged.")
     ap.add_argument("--out-dir", default=str(ROOT / "structure-prompt-adapter/outputs/eval/threeway_designability"))
     args = ap.parse_args()
 
@@ -88,9 +92,31 @@ def main():
 
     # Stage 2 — ProteinMPNN
     seqsets = inverse_fold(cfg, designs=designs)
-    # Stage 3 — OpenFold3 refold (separate env, one model-load for the whole matrix)
-    refolder = OF3Refolder(ckpt_path=cfg.paths.openfold3_ckpt, runner_yaml=cfg.paths.openfold3_runner_yaml,
-                           out_dir=str(out_dir / "of3"), conda_env=args.of3_conda_env)
+    # Stage 3 — OpenFold3 refold (separate env, one model-load for the whole matrix).
+    # OF3 batching (mirrors scripts/eval/bench_of3_batch.py): at bs>1 fold B seqs per forward for a ~2.5x
+    # speedup (dev 23 §7.8). The triton kernels CANNOT batch (evoformer.py:915 asserts bias batch dim = 1),
+    # so bs>1 FORCES the nokernel base yaml (regardless of --of3-runner-yaml / $OF3_RUNNER_YAML, which may be
+    # triton on the cloud) + injects data_module_args.batch_size=B + applies the of3_batch_patch.py shim.
+    B = int(args.of3_batch_size)
+    of3_runner_yaml = cfg.paths.openfold3_runner_yaml
+    batch_shim = None
+    if B > 1:
+        nokernel = Path(__file__).resolve().parents[2] / "configs/of3/of3_nokernel.yml"
+        passed = Path(of3_runner_yaml).name
+        if passed != "of3_nokernel.yml":
+            print(f"[desig] batch_size={B}: forcing nokernel base ({nokernel.name}) — triton can't batch "
+                  f"(was {passed}).")
+        base = OmegaConf.load(str(nokernel))
+        y = OmegaConf.create(OmegaConf.to_container(base, resolve=False))
+        y["data_module_args"] = {**dict(y.get("data_module_args") or {}), "batch_size": B}
+        yf = out_dir / f"of3_runner_bs{B}.yml"; OmegaConf.save(y, yf)   # persisted under out-dir -> captured by cp -r
+        of3_runner_yaml = str(yf)
+        batch_shim = str(Path(__file__).resolve().parent / "of3_batch_patch.py")  # sibling; portable local + /opt/spa
+        print(f"[desig] OF3 batching ON: bs={B} via {yf.name} + shim {Path(batch_shim).name} "
+              f"(~2.5x at bs=8, folds equivalent — dev 23 §7.8)")
+    refolder = OF3Refolder(ckpt_path=cfg.paths.openfold3_ckpt, runner_yaml=of3_runner_yaml,
+                           out_dir=str(out_dir / "of3"), conda_env=args.of3_conda_env,
+                           batch_patch_shim=batch_shim)
     refolds_by_name = refolder.refold_all([ss for ss in seqsets if ss is not None])
 
     # Stage 4 — score (designability scRMSD + refold-side motif survival)

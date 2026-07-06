@@ -66,6 +66,7 @@ add_env K "${K:-}"
 add_env NSEQ "${NSEQ:-}"
 add_env SEEDS "${SEEDS:-}"
 add_env WINNERS "${WINNERS:-}"
+add_env OF3_BATCH_SIZE "${OF3_BATCH_SIZE:-}"    # designability OF3 refold batch_size (nokernel; ~2.5x@bs=8; dev 23 §7.8)
 add_env PROTEINMPNN_SEED "${PROTEINMPNN_SEED:-}"
 add_env LEAN_RESULTS "${LEAN_RESULTS:-}"
 # OF3 batch-bench knobs (run_of3_batch_bench.sh):

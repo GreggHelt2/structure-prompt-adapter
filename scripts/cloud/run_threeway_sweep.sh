@@ -29,6 +29,7 @@ FOLDS="${FOLDS:-A0A090ME36,A0A3P5VTL4,A0A6A0D1E8}"           # target-fold G ids
 LAYOUTS="${LAYOUTS:-BAC,ABC,CAB}"; LAMBDAS="${LAMBDAS:-2,3}"
 ULEN="${ULEN:-90}"; CLEN="${CLEN:-120}"; K="${K:-8}"; NSEQ="${NSEQ:-8}"; SEEDS="${SEEDS:-0}"
 WINNERS="${WINNERS:-}"                                       # designability: motif:seg:fold:layout:lambda[,...]
+OF3_BATCH_SIZE="${OF3_BATCH_SIZE:-8}"                        # designability: OF3 refold batch_size (nokernel; ~2.5x@bs=8; dev 23 §7.8; set 1 to disable)
 PREP=/workspace/prep; OUT=/workspace/threeway
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
@@ -54,7 +55,13 @@ gcloud storage cp "$PREP_URI/*" "$PREP/" 2>/dev/null || gcloud storage cp -r "$P
 # Cloud paths -> the drivers' env fallbacks (see the --*-ckpt / $ENV args added in dev 23 §2).
 export RFD3_CKPT=/workspace/weights/rfd3_latest.ckpt
 export OF3_CKPT=/workspace/weights/of3-p2-155k.pt
-export OF3_RUNNER_YAML="$SPA_REPO/configs/of3/of3_triton.yml"
+# Designability is the only OF3 consumer (adherence has no OF3). OF3 batching (bs>1) REQUIRES nokernel —
+# the triton kernels can't batch (evoformer.py:915). So use nokernel for designability, triton otherwise.
+if [ "$STAGE" = "designability" ]; then
+  export OF3_RUNNER_YAML="$SPA_REPO/configs/of3/of3_nokernel.yml"
+else
+  export OF3_RUNNER_YAML="$SPA_REPO/configs/of3/of3_triton.yml"
+fi
 export PROTEINMPNN_REPO="$MPNN_REPO"
 SPA_CKPT=/workspace/weights/spa_multigran.pt
 COMMON=(--ckpt "$SPA_CKPT" --rfd3-ckpt "$RFD3_CKPT" --pdb-dir "$PREP" --u-len "$ULEN" --c-len "$CLEN")
@@ -105,7 +112,7 @@ elif [ "$STAGE" = "designability" ]; then
     [ -n "$pdbs" ] || { log "  [des] $w: no localized PDBs found"; continue; }
     if python "$SPA_REPO/scripts/eval/score_threeway_designability.py" \
          --pdbs $pdbs --contig "$contig" --motif-source "$PREP/AF-${mid}-F1-model_v4_esmfold_v1.pdb" \
-         --num-seqs "$NSEQ" --out-dir "$po/desig" </dev/null; then
+         --num-seqs "$NSEQ" --of3-batch-size "$OF3_BATCH_SIZE" --out-dir "$po/desig" </dev/null; then
       gcloud storage cp "$po/desig/designability.json" "$RESULTS_URI/designability/${key}.json" 2>/dev/null
       manifest "$po/manifest.json" stage=designability motif_source="$mid" motif_segment="$seg" \
         target_fold="$f" layout="$layout" lambda="$lam" seed=0 u_len="$ULEN" c_len="$CLEN" contig="$contig" \
