@@ -86,6 +86,25 @@ def apply_patches():
     _wrap_callback(OF3OutputWriter)
     _wrap_callback(PredictTimer)
 
+    # -- (1b) SURFACE swallowed predict_step exceptions to stderr -----------------------------------
+    # predict_step wraps forward+confidence in a try/except (runner.py:954) that logs to
+    # <out>/logs/predict_err_rank*.log and returns None — so ANY bs>1 failure looks like "exit 0, zero
+    # cifs" (the H100 "no folds" mystery: we were blind because the captured subprocess stderr is
+    # discarded on exit-0). Mirror the full traceback to stderr so it lands in captured output / cloud
+    # job logs. Read-only OF3 is untouched; we only wrap its exception logger.
+    import traceback as _tb
+    _orig_logexc = OpenFold3AllAtom._log_predict_exception
+
+    def _log_predict_exception(self, e, query_id):
+        try:
+            print("[of3_batch_patch] SWALLOWED OF3 predict_step exception (surfaced to stderr):\n"
+                  + _tb.format_exc(), file=sys.stderr, flush=True)
+        except Exception:
+            pass
+        return _orig_logexc(self, e, query_id)
+
+    OpenFold3AllAtom._log_predict_exception = _log_predict_exception
+
     # -- (2) ragged-atom confidence: unpad each sample to its TRUE atom count ------------------------
     # Same-length seqs have different #atoms; the collator atom-pads to the batch max A. OF3's
     # confidence loop keeps that padding, but the token->atom broadcast (num_atoms_per_token) uses the

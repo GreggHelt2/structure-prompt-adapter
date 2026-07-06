@@ -136,11 +136,31 @@ class OF3Refolder:
             env["CUDA_VISIBLE_DEVICES"] = str(self.cuda_visible_devices)
         cmd = self._build_command(query_json, run_dir)
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        self._last_proc = proc  # kept so callers can surface OF3 output on a silent (exit-0) empty result
         if proc.returncode != 0:
             raise RuntimeError(
                 f"OpenFold3 refold failed (exit {proc.returncode}) for {run_dir.name}.\n"
                 f"cmd: {' '.join(cmd)}\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}"
             )
+
+    def _surface_missing(self, run_dir: Path, n_missing: int) -> None:
+        """Diagnose a SILENT shortfall (exit 0 but cifs missing). OF3's ``predict_step`` wraps
+        forward+confidence in a try/except that logs to ``<run>/logs/predict_err_rank*.log`` and returns
+        ``None`` — so a real failure (esp. a bs>1 ragged-atom crash) looks like "no folds" with no error.
+        Surface the swallowed traceback(s) + the tail of OF3's own stderr so it stops being invisible."""
+        print(f"[of3] ⚠️  {n_missing} refold(s) MISSING despite exit 0 — OF3 likely SWALLOWED an exception.")
+        logs = sorted(run_dir.glob("**/predict_err_rank*.log"))
+        for lg in logs:
+            print(f"[of3]    --- swallowed traceback: {lg} ---")
+            try:
+                print(lg.read_text()[-2500:])
+            except Exception as exc:  # pragma: no cover
+                print(f"[of3]    (could not read {lg}: {exc})")
+        proc = getattr(self, "_last_proc", None)
+        if proc is not None and (proc.stderr or "").strip():
+            print(f"[of3]    --- OF3 stderr tail ---\n{proc.stderr[-2000:]}")
+        if not logs and not (proc and (proc.stderr or "").strip()):
+            print(f"[of3]    (no predict_err log under {run_dir} and no stderr — check batch_size/kernel yaml)")
 
     # ----------------------------------------------------------------------------------------------
     # Refolder protocol
@@ -167,6 +187,7 @@ class OF3Refolder:
                 missing += 1
         if missing:
             print(f"[of3] {name}: {missing}/{len(sequences)} refold(s) missing on disk (dropped).")
+            self._surface_missing(run_dir, missing)
         print(f"[of3] {name} -> {len(refolds)} refold(s) in {run_dir}")
         return refolds
 
@@ -201,5 +222,8 @@ class OF3Refolder:
                 if cif.exists():
                     out[nm].append(str(cif))
                     total += 1
+        expected = sum(nseq)
+        if total < expected:
+            self._surface_missing(run_dir, expected - total)
         print(f"[of3] refold_all: {total} refold(s) for {len(sets)} backbone(s) in ONE run -> {run_dir}")
         return out
