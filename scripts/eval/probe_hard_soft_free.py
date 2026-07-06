@@ -171,12 +171,54 @@ def build_partition(cfg, motif_seg, u_len, c_len, order):
     return motif_spec, M_idx, U_idx, C_idx, L, chain_resids
 
 
-def _profile(L, U_idx, device):
-    """Per-residue λ weight [L]: 1 on U, 0 on M ∪ C (design-side ``set_profile``; ``21`` §2.2/§3)."""
+def _internal_u_edges(u_lo, u_hi, L):
+    """Which of U's two ends are INTERNAL seams (adjacent to M/C) vs a free chain terminus. A U edge is
+    internal iff it is not at a chain end: left iff ``u_lo > 0`` (a region precedes U), right iff
+    ``u_hi < L-1`` (a region follows U). Geometry alone ⇒ BAC taper U↔M only, ABC both, CAB M↔U only —
+    no layout hardcode (dev ``25`` §5.3)."""
+    return (u_lo > 0, u_hi < L - 1)
+
+
+def _feather_ramp(t, shape):
+    """Rising ramp t∈[0,1] → [0,1]: 0 at the seam edge (t=0), 1 in U's interior (t=1)."""
+    import math
+
+    t = min(1.0, max(0.0, t))
+    if shape == "triangular":
+        return t
+    if shape == "gaussian":                                    # half-gaussian, renormalized to hit 0 at t=0
+        g0 = math.exp(-2.0)
+        return (math.exp(-2.0 * (1.0 - t) ** 2) - g0) / (1.0 - g0)
+    return 0.5 * (1.0 - math.cos(math.pi * t))                 # cosine (default; ports probe_localization)
+
+
+def _profile(L, U_idx, device, feather_width=0, shape="cosine"):
+    """Per-residue λ weight [L]: 1 on U, 0 on M ∪ C (design-side ``set_profile``; ``21`` §2.2/§3).
+
+    ``feather_width`` w > 0 tapers λ from 1 in U's interior **down toward 0 approaching each INTERNAL U
+    seam** (a U boundary adjacent to M/C), over the w U-residues nearest that seam — a graded handoff
+    instead of the boxcar's single-peptide-bond 1→0 flip (dev ``25`` §5). Chain-terminus ends of U (free
+    ends) stay at full λ; see :func:`_internal_u_edges`. ``shape`` = cosine (default) | triangular |
+    gaussian. **w = 0 → the exact original boxcar** (regression-safe default)."""
     import torch
 
     w = torch.zeros(L)
-    w[U_idx] = 1.0
+    U = sorted(int(i) for i in U_idx)
+    if not U:
+        return w.to(device)
+    w[U] = 1.0
+    fw = int(feather_width)
+    if fw <= 0:
+        return w.to(device)                                    # exact current boxcar
+    u_lo, u_hi = U[0], U[-1]
+    fw = min(fw, len(U))                                        # cannot taper more residues than |U|
+    left_int, right_int = _internal_u_edges(u_lo, u_hi, L)
+    if left_int:                                               # taper the fw U-residues nearest the left seam
+        for k in range(fw):                                   # k = depth into U from the seam (0 = edge residue)
+            w[u_lo + k] = min(float(w[u_lo + k]), _feather_ramp(k / fw, shape))
+    if right_int:                                             # ...and/or the right seam
+        for k in range(fw):
+            w[u_hi - k] = min(float(w[u_hi - k]), _feather_ramp(k / fw, shape))
     return w.to(device)
 
 
@@ -333,7 +375,18 @@ def run_grid(args):
         adapter.eval()
         adtype = next(adapter.parameters()).dtype
         prompt = p[None].expand(K, -1, -1).to(device=dev, dtype=adtype).contiguous()
-        profile = _profile(L, U_idx, dev)
+        fw = int(getattr(args, "feather_width", 0) or 0)
+        fshape = getattr(args, "feather_shape", "cosine")
+        profile = _profile(L, U_idx, dev, feather_width=fw, shape=fshape)
+        if fw > 0:                                             # sanity-print the taper before trusting it (dev 25 §5)
+            ulo_i, uhi_i = min(U_idx), max(U_idx)              # INCLUSIVE U bounds (u_hi from _contiguous is exclusive)
+            left_int, right_int = _internal_u_edges(ulo_i, uhi_i, L)
+            effw = min(fw, len(U_idx))
+            tapered = ([f"left U↔prev @{ulo_i}"] if left_int else []) + ([f"right U↔next @{uhi_i}"] if right_int else [])
+            pv = [round(float(x), 3) for x in profile.detach().cpu().tolist()]
+            print(f"[hsf]   feather w={fw}(eff {effw}) shape={fshape}: tapered {tapered or 'NONE'}  |  "
+                  f"terminus-edges left={not left_int} right={not right_int}")
+            print(f"[hsf]   λ-profile over U[{ulo_i}..{uhi_i}] = {[pv[i] for i in U_idx]}")
 
         edir = out_dir / f"{layout}_{args.motif_source}_{args.target}_M{len(M_idx)}U{len(U_idx)}C{len(C_idx)}"
         edir.mkdir(parents=True, exist_ok=True)
@@ -440,6 +493,10 @@ def main():
     ap.add_argument("--pdb-dir", default=DEFAULT_PDB_DIR)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--out-dir", default="outputs/eval/threeway")
+    ap.add_argument("--feather-width", type=int, default=0,
+                    help="taper λ over the W U-residues nearest each INTERNAL seam (0 = boxcar; dev 25 §5)")
+    ap.add_argument("--feather-shape", default="cosine", choices=["cosine", "triangular", "gaussian"],
+                    help="feather ramp shape (cosine default; dev 25 §5)")
     args = ap.parse_args()
 
     grid, out_dir = run_grid(args)
