@@ -76,8 +76,10 @@ def main():
     print(f"[prep] wrote manifest ({len(motif_segs)} motifs × {len(folds)} folds)")
 
     if not args.no_push:
-        print(f"[prep] pushing {stage}/* -> {args.gcs}/")
-        subprocess.run([GCLOUD, "storage", "cp", "-r", f"{stage}/.", f"{args.gcs}/"], check=True)
+        print(f"[prep] pushing {stage}/* -> {args.gcs}/ (flat)")
+        # cp the FILES directly (gcloud storage expands the wildcard) — NOT `cp -r "$dir/."`, which
+        # nests the whole dir under {gcs}/<dirname>/ and breaks the run script's `$PREP_URI/*` pull.
+        subprocess.run([GCLOUD, "storage", "cp", f"{stage}/*", f"{args.gcs}/"], check=True)
         print(f"[prep] done -> {args.gcs}")
     else:
         print(f"[prep] --no-push: staged locally at {stage} (upload skipped)")
