@@ -5,6 +5,9 @@
 #                         (cheap; no OF3). The screen — rank cells by net-steer with the pin held.
 #   STAGE=designability : for each WINNER cell (motif:seg:fold:layout:lambda), regenerate that cell then
 #                         score_threeway_designability.py (ProteinMPNN->OF3 scRMSD) -> designability.json.
+# PERSISTENCE (dev 23): per cell we push the FULL artifact tree to $RESULTS/<stage>/cells/<key>/ — the
+# RFD3+SPA design PDBs, ProteinMPNN FASTAs, OF3 refold CIFs, the per-cell json, AND a manifest.json
+# (fixed motif + SPA-prompt fold + layout/λ/seed + exact input-file refs) — so 3D figures are makeable after.
 # Mirrors run_scaffold_eval.sh (spa-combined image: RFD3+SPA+ESM3+tmtools in system python, OF3 in the
 # spa-verify-of3 conda env; ProteinMPNN git-cloned; of3_triton.yml refolder). NOT set -e: one cell failing
 # must not abort the sweep. **DRAFT — validate with DRY_RUN then a tiny smoke (1 motif × 1 fold) first.**
@@ -29,6 +32,9 @@ WINNERS="${WINNERS:-}"                                       # designability: mo
 PREP=/workspace/prep; OUT=/workspace/threeway
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
+# Write a provenance manifest (json): conditioning + exact input/result file refs, so every saved
+# structure is traceable to its fixed motif + SPA-prompt fold. $1=outfile; rest = key=val pairs.
+manifest(){ local out="$1"; shift; python -c 'import json,sys; open(sys.argv[1],"w").write(json.dumps(dict(kv.split("=",1) for kv in sys.argv[2:]),indent=2)+"\n")' "$out" "$@"; }
 
 export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
 export PATH="/usr/local/nvidia/bin:${PATH}"; ldconfig 2>/dev/null || true
@@ -62,14 +68,23 @@ if [ "$STAGE" = "adherence" ]; then
     mid="${ms%%:*}"; seg="${ms##*:}"
     for f in "${FO[@]}"; do
       for s in $(tr ',' ' ' <<< "$SEEDS"); do
-        po="$OUT/adherence/${mid}_${seg}_${f}_s${s}"
-        python "$SPA_REPO/scripts/eval/probe_hard_soft_free.py" "${COMMON[@]}" \
-          --motif-source "$mid" --motif-seg "$seg" --target "$f" \
-          --layouts "$LAYOUTS" --lambdas "$LAMBDAS" --num-designs "$K" --seed "$s" \
-          --out-dir "$po" </dev/null \
-          && { gcloud storage cp "$po/grid_result.json" "$RESULTS_URI/adherence/${mid}_${seg}_${f}_s${s}.json" 2>/dev/null; \
-               OK=$((OK+1)); log "  [adh] ${mid}:${seg} × ${f} s${s} OK -> staged"; } \
-          || log "  [adh] ${mid}:${seg} × ${f} s${s} FAILED (continuing)"
+        po="$OUT/adherence/${mid}_${seg}_${f}_s${s}"; key="${mid}_${seg}_${f}_s${s}"
+        if python "$SPA_REPO/scripts/eval/probe_hard_soft_free.py" "${COMMON[@]}" \
+             --motif-source "$mid" --motif-seg "$seg" --target "$f" \
+             --layouts "$LAYOUTS" --lambdas "$LAMBDAS" --num-designs "$K" --seed "$s" \
+             --out-dir "$po" </dev/null; then
+          gcloud storage cp "$po/grid_result.json" "$RESULTS_URI/adherence/${key}.json" 2>/dev/null
+          manifest "$po/manifest.json" stage=adherence motif_source="$mid" motif_segment="$seg" \
+            target_fold="$f" layouts="$LAYOUTS" lambdas="$LAMBDAS" seed="$s" u_len="$ULEN" c_len="$CLEN" \
+            num_designs="$K" input_motif_pdb="$PREP_URI/AF-${mid}-F1-model_v4_esmfold_v1.pdb" \
+            input_fold_pdb="$PREP_URI/AF-${f}-F1-model_v4_esmfold_v1.pdb" rfd3_ckpt="$RFD3_CKPT_URI" \
+            spa_ckpt="$MG_CKPT_URI" gcs_cell_prefix="$RESULTS_URI/adherence/cells/${key}"
+          # FULL cell tree (RFD3+SPA design PDBs + grid_result.json + manifest), path-preserved -> GCS
+          gcloud storage cp -r "$po" "$RESULTS_URI/adherence/cells/" 2>/dev/null || log "  [warn] structure push failed for $key"
+          OK=$((OK+1)); log "  [adh] ${mid}:${seg} × ${f} s${s} OK -> json+structures+manifest staged"
+        else
+          log "  [adh] ${mid}:${seg} × ${f} s${s} FAILED (continuing)"
+        fi
       done
     done
   done
@@ -80,7 +95,7 @@ elif [ "$STAGE" = "designability" ]; then
   log "DESIGNABILITY on ${#WS[@]} winner cell(s): K=$K N=$NSEQ"
   for w in "${WS[@]}"; do
     IFS=':' read -r mid seg f layout lam <<< "$w"
-    po="$OUT/desig/${mid}_${seg}_${f}_${layout}_l${lam}"
+    po="$OUT/desig/${mid}_${seg}_${f}_${layout}_l${lam}"; key="${mid}_${seg}_${f}_${layout}_l${lam}"
     # regenerate this one cell (same seed 0), then score its localized designs
     python "$SPA_REPO/scripts/eval/probe_hard_soft_free.py" "${COMMON[@]}" \
       --motif-source "$mid" --motif-seg "$seg" --target "$f" \
@@ -88,12 +103,21 @@ elif [ "$STAGE" = "designability" ]; then
     contig=$(cd "$SPA_REPO/scripts/eval" && python -c "from probe_hard_soft_free import build_contig; print(build_contig('$seg',$ULEN,$CLEN,'$layout')[0])")
     pdbs=$(ls "$po/${layout}_${mid}_${f}_"*/localized_l${lam}_*.pdb 2>/dev/null)
     [ -n "$pdbs" ] || { log "  [des] $w: no localized PDBs found"; continue; }
-    python "$SPA_REPO/scripts/eval/score_threeway_designability.py" \
-      --pdbs $pdbs --contig "$contig" --motif-source "$PREP/AF-${mid}-F1-model_v4_esmfold_v1.pdb" \
-      --num-seqs "$NSEQ" --out-dir "$po/desig" </dev/null \
-      && { gcloud storage cp "$po/desig/designability.json" "$RESULTS_URI/designability/${mid}_${seg}_${f}_${layout}_l${lam}.json" 2>/dev/null; \
-           OK=$((OK+1)); log "  [des] $w OK -> staged"; } \
-      || log "  [des] $w SCORE FAILED (continuing)"
+    if python "$SPA_REPO/scripts/eval/score_threeway_designability.py" \
+         --pdbs $pdbs --contig "$contig" --motif-source "$PREP/AF-${mid}-F1-model_v4_esmfold_v1.pdb" \
+         --num-seqs "$NSEQ" --out-dir "$po/desig" </dev/null; then
+      gcloud storage cp "$po/desig/designability.json" "$RESULTS_URI/designability/${key}.json" 2>/dev/null
+      manifest "$po/manifest.json" stage=designability motif_source="$mid" motif_segment="$seg" \
+        target_fold="$f" layout="$layout" lambda="$lam" seed=0 u_len="$ULEN" c_len="$CLEN" contig="$contig" \
+        num_designs="$K" num_seqs="$NSEQ" input_motif_pdb="$PREP_URI/AF-${mid}-F1-model_v4_esmfold_v1.pdb" \
+        input_fold_pdb="$PREP_URI/AF-${f}-F1-model_v4_esmfold_v1.pdb" rfd3_ckpt="$RFD3_CKPT_URI" \
+        spa_ckpt="$MG_CKPT_URI" of3_ckpt="$OF3_CKPT_URI" gcs_cell_prefix="$RESULTS_URI/designability/cells/${key}"
+      # FULL cell tree: RFD3+SPA design PDBs + ProteinMPNN FASTAs + OF3 refold CIFs + designability.json + manifest
+      gcloud storage cp -r "$po" "$RESULTS_URI/designability/cells/" 2>/dev/null || log "  [warn] structure push failed for $key"
+      OK=$((OK+1)); log "  [des] $w OK -> json+structures+manifest staged"
+    else
+      log "  [des] $w SCORE FAILED (continuing)"
+    fi
   done
 else
   log "FATAL: unknown STAGE=$STAGE (adherence|designability)"; exit 1
