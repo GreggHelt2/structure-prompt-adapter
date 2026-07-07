@@ -36,7 +36,7 @@ Adherence-only (no ProteinMPNN/OF3) ⇒ fast + A5000-friendly (≤~256 res). N×
 
 Run (A5000):
     conda run -n spa-dev python scripts/eval/probe_localization.py \
-        --ckpt checkpoints/spa_C_multigran_final.pt \
+        --ckpt checkpoints/spa-Nx1536-multigran/spa_C_final.pt \
         --foreign A0A1X7NTP0,A0A6A0D1E8,A0A090ME36,A0A7S1B8G4,A0A820JRM2 \
         --hosts   A0A522W419,A0A6J8EPQ1,A0A7C9GW19,H1SDK8,A0A1X0IID6 \
         --frames balanced,fixed_l,host_domain --lambdas 1,2 --feather \

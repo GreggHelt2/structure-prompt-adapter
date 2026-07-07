@@ -38,7 +38,7 @@ Adherence-only (no ProteinMPNN/OF3) ⇒ fast + A5000-friendly. Smoke test = ONE 
 
 Run (A5000) — the confirmed smoke-test case (dev ``21``; 2026-07-05):
     conda run -n spa-dev python scripts/eval/probe_hard_soft_free.py \
-        --ckpt checkpoints/spa_C_multigran_final.pt \
+        --ckpt checkpoints/spa-Nx1536-multigran/spa_C_final.pt \
         --motif-source A0A2X2KHU0 --motif-seg A2-20 \
         --target A0A090ME36 --u-len 90 --c-len 120 \
         --lambda 1 --num-designs 4 --seed 0 \
@@ -54,7 +54,7 @@ from pathlib import Path
 DEFAULT_PDB_DIR = ("/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/"
                    "atomistica_data_release/pdb")
 DEFAULT_PATTERN = "AF-{id}-F1-model_v4_esmfold_v1.pdb"
-DEFAULT_CKPT = "checkpoints/spa_C_multigran_final.pt"
+DEFAULT_CKPT = "checkpoints/spa-Nx1536-multigran/spa_C_final.pt"
 
 
 # --------------------------------------------------------------------------------------------------

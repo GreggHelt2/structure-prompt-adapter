@@ -18,7 +18,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
 
-CKPT="${CKPT:-checkpoints/spa_C_multigran_final.pt}"
+CKPT="${CKPT:-checkpoints/spa-Nx1536-multigran/spa_C_final.pt}"
 STAGE="${STAGE:-adherence}"
 ARM="${ARM:-both}"
 LAMBDAS="${LAMBDAS:-0,0.5,1,2}"

@@ -22,8 +22,8 @@ same partial prompt. N×1536 (variant C) ONLY — pooled variants drop the per-r
 Run (A5000; adherence + design-side sub-region motif-RMSD, no OF3):
     conda run -n spa-dev python scripts/eval/run_scaffold_eval.py \
         --prompts A0A7S1B8G4,A0A522W419,A0A820JRM2 --granularity segment \
-        --multigran-ckpt checkpoints/spa_C_multigran_final.pt \
-        --base-ckpt      checkpoints/spa_C_uncond_final.pt \
+        --multigran-ckpt checkpoints/spa-Nx1536-multigran/spa_C_final.pt \
+        --base-ckpt      checkpoints/spa-Nx1536-uncond/spa_C_final.pt \
         --num-designs 4 --lambda 1.0 --out-dir outputs/eval/scaffold
 
 Add ``--of3`` to also compute designability scRMSD (ProteinMPNN → OpenFold3; ≤256 res on the A5000).
