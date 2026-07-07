@@ -212,6 +212,9 @@ OVERRIDES=( data=cddb hardware=cloud_h100 "variant=$VARIANT"
 [ -n "$TRACKER" ]         && OVERRIDES+=( "train.tracker=$TRACKER" )
 [ -n "${DIFFUSION_BATCH_SIZE:-}" ] && OVERRIDES+=( "data.diffusion_batch_size=$DIFFUSION_BATCH_SIZE" )  # D (recipe=8)
 [ -n "${MATMUL_PRECISION:-}" ]     && OVERRIDES+=( "train.matmul_precision=$MATMUL_PRECISION" )
+# Arbitrary extra Hydra overrides (space-separated), for knobs without a dedicated env var — e.g. the
+# extend-run's `train.sample_with_replacement=false` (dev 28 §2). Word-split intentionally.
+[ -n "${EXTRA_OVERRIDES:-}" ] && OVERRIDES+=( ${EXTRA_OVERRIDES} )
 # Distinct, resumable W&B run per job: name + stable id from $NAME so a Vertex restart REATTACHES the
 # same run (Run A vs Run B differ by $NAME), matching the ckpt resume above.
 if [ "$TRACKER" = "wandb" ] && [ -n "${NAME:-}" ]; then

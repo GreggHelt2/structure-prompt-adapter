@@ -108,6 +108,7 @@ add_env CKPT_OFF "${CKPT_OFF}"
 add_env MATMUL_PRECISION "${MATMUL_PRECISION}"
 add_env DSWEEP "${DSWEEP}"
 add_env DIFFUSION_BATCH_SIZE "${DIFFUSION_BATCH_SIZE}"
+add_env EXTRA_OVERRIDES "${EXTRA_OVERRIDES:-}"
 
 # On-demand (default) OMITS scheduling (Vertex defaults to on-demand). SPOT/FLEX_START draw the separate
 # preemptible H100 quota (=0 here) -> opt in only with a quota bump.
