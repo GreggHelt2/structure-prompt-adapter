@@ -166,7 +166,14 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
     # residues (dev 14 §3). `(source_pdb, motif_residues)` — derived from the same eval.motif the generator
     # used, so the indices match the design frame. None ⇒ no motif scored (unconditional evals unchanged).
     motif_score = None
-    if cfg.eval.get("motif"):
+    if cfg.eval.get("motif") and not cfg.eval.motif.get("contig"):
+        # UNINDEXED motif (shape A, dev 27 §5): RFD3 chooses each design's motif positions (its
+        # diffused_index_map), so there are no a-priori design indices to score the motif-RMSD against here.
+        # scRMSD designability + TM→G adherence need no motif indices, so they still score; the design-side
+        # pin (guaranteed by RFD3's freeze) is validated post-hoc from diffused_index_map. motif_score stays None.
+        print("[flywheel] unindexed motif (no contig) -> design positions are model-chosen; skipping "
+              "design-side motif-RMSD (scRMSD + adherence still scored; pin guaranteed, dev 27 §5).")
+    elif cfg.eval.get("motif"):
         from .generate import _parse_contig_motif, motif_atom_spec
         from .score import _as_struct, source_positions
         m = cfg.eval.motif

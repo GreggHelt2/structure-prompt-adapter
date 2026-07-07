@@ -1,0 +1,38 @@
+# @package eval
+# Shape-A enzyme Tier-0 (dev 27 §5) — cutinase (1CEX) catalytic triad, **UNINDEXED** (RFD3 places it, its
+# diffused_index_map) ⊕ a foreign fold prompt. Unindexing restores the compatible arm's fold headroom that
+# the indexed run (configs/eval/enzyme_tier0.yaml) lacked — the only setup that can test the compatibility
+# thesis (dev 26 §0, 27 §6.3). Bundles the two config-cheap confound fixes: C = fixed ProteinMPNN seed 42 +
+# N=16 (reproducible rates, dev 05 E9); D = the driver points --prompt at a designable incompatible control.
+#
+# Run:  EVAL_CFG=enzyme_tier0_shapeA INCOMPAT_ID=A0A1X7NTP0 CKPT=<multigran> bash scripts/eval/run_enzyme_tier0.sh
+defaults:
+  - default
+  - _self_
+
+# --- the hard motif: cutinase Ser120–Asp175–His188 triad, TIP atoms, UNINDEXED (no contig) --------------
+# `unindex` + `length` (the paper's enzyme mode; foundry enzyme_design.json). RFD3 picks each design's motif
+# positions, so there is scaffold headroom for SPA to steer. Tip-atom selection = the same as the indexed run
+# (Ser hydroxyl / Asp carboxylate / His imidazole; CA/CB anchor the sidechain, no N/C/O backbone).
+motif:
+  source_pdb: null                              # SET by the driver (staged 1cex.pdb)
+  unindex: "A120,A175,A188"                     # model-placed catalytic triad (no fixed positions)
+  length: "180-200"                             # scaffold length range RFD3 embeds the triad within
+  fixed_atoms:
+    A120: "OG,CB,CA"
+    A175: "CB,CG,OD1,OD2"
+    A188: "CB,CG,ND1,CD2,CE1,NE2"
+  self_prompt: false                            # foreign-fold prompt (G ≠ source) → attend to all of G
+
+# --- soft steer + sweep -------------------------------------------------------------------------------
+conditions: [baseline, spa]
+lambda_scale: [0.0, 0.5, 1.0, 2.0]
+num_designs: 8
+seed: 0
+prompt_pdb: null                                # SET per-arm by the driver (compatible 1CEX / incompatible)
+out_dir: ./outputs/eval/enzyme_tier0_shapeA
+
+# --- C: reproducible designability rates (dev 05 E9) --------------------------------------------------
+proteinmpnn:
+  seed: 42                                      # fixed (vs default 0 = random each run → best-of-N noise)
+  num_seqs: 16                                  # N=16 (vs 8) — rates ~1 higher + less jitter

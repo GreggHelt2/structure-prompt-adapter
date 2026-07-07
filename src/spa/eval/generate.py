@@ -278,29 +278,48 @@ def build_motif(cfg):
     from omegaconf import OmegaConf
     from rfd3.inference.input_parsing import DesignInputSpecification
 
-    contig = str(m["contig"])
-    residues = _parse_contig_motif_indices(contig)
-    # `fixed_atoms` selects which atoms of the motif residues RFD3 pins. Historically a bool (True = the
-    # §4 backbone-island path — all atoms of the contig residues). It may now also be a **per-residue atom
-    # selection** — a dict/str like {"A120":"OG,CB,CA","A188":"BKBN"} (RFD3 keywords ALL/BKBN/TIP or an
-    # explicit atom list) — to pin sidechain *tip* atoms for atomic enzyme-motif scaffolding (dev 26 §8.1;
-    # this is exactly foundry's own enzyme_design.json format). RFD3's before-validator coerces a dict via
-    # InputSelection.from_any (input_parsing.py:362); we convert an OmegaConf DictConfig to a plain dict so
-    # that coercion sees a real mapping. `unindex` (optional) lets RFD3 infer the motif residues' sequence
-    # position (the paper's atomic-motif mode; dev 26 §8.6 shape A) — omitted ⇒ indexed (shape B).
+    # `fixed_atoms` selects which atoms of the motif residues RFD3 pins. A bool (True = §4 all-atoms of the
+    # contig residues), OR a **per-residue atom selection** — a dict/str like {"A120":"OG,CB,CA"} (RFD3
+    # keywords ALL/BKBN/TIP or explicit atoms) — pinning sidechain *tip* atoms for atomic enzyme motifs (dev
+    # 26 §8.1; foundry's enzyme_design.json format). RFD3's before-validator coerces a dict via
+    # InputSelection.from_any (input_parsing.py:362); convert an OmegaConf DictConfig to a plain dict first.
     fixed_atoms = m.get("fixed_atoms", True)
     if OmegaConf.is_config(fixed_atoms):
         fixed_atoms = OmegaConf.to_container(fixed_atoms, resolve=True)
-    spec_kwargs = {"input": str(m["source_pdb"]), "contig": contig, "select_fixed_atoms": fixed_atoms}
-    if m.get("unindex"):
-        spec_kwargs["unindex"] = str(m["unindex"])
+    spec_kwargs = {"input": str(m["source_pdb"]), "select_fixed_atoms": fixed_atoms}
+
+    # Two motif modes (dev 26 §8.6). INDEXED (shape B): a `contig` fixes the positions → design-frame
+    # indices are known up front. UNINDEXED (shape A, the paper's enzyme mode; dev 27 §5): `unindex` +
+    # `length`, RFD3 chooses each design's motif positions (its diffused_index_map) → residues=None (the SPA
+    # prompt-mask is moot under a foreign-fold prompt; the design-side motif-RMSD is scored post-hoc from
+    # diffused_index_map, and the pin is guaranteed by RFD3's revealed-coord freeze).
+    contig = m.get("contig")
+    if contig:
+        contig = str(contig)
+        residues = _parse_contig_motif_indices(contig)
+        spec_kwargs["contig"] = contig
+        if m.get("unindex"):
+            spec_kwargs["unindex"] = str(m["unindex"])
+        if cfg.eval.get("length") is not None:
+            print("[generate] motif active -> design length is set by eval.motif.contig; eval.length ignored.")
+        where = (f"{len(residues)} fixed residues at design indices "
+                 f"[{min(residues)}..{max(residues)}] (contig {contig!r})")
+    else:
+        unindex = m.get("unindex")
+        if not unindex:
+            raise ValueError("eval.motif needs either `contig` (indexed) or `unindex` (unindexed, + `length`).")
+        length = m.get("length") if m.get("length") is not None else cfg.eval.get("length")
+        if length is None:
+            raise ValueError("unindexed motif (eval.motif.unindex, no contig) needs eval.motif.length or eval.length.")
+        spec_kwargs["unindex"] = str(unindex)
+        spec_kwargs["length"] = str(length)
+        residues = None
+        n_un = len([t for t in str(unindex).replace(" ", "").split(",") if t])
+        where = f"{n_un} unindexed (model-placed) residues, length {length} (unindex {str(unindex)!r})"
+
     spec = DesignInputSpecification(**spec_kwargs)
-    if cfg.eval.get("length") is not None:
-        print("[generate] motif active -> design length is set by eval.motif.contig; eval.length ignored.")
     atom_note = "" if not isinstance(fixed_atoms, dict) else f", atom-level ({len(fixed_atoms)} sel)"
-    unindex_note = f", unindex={spec_kwargs['unindex']}" if "unindex" in spec_kwargs else ""
-    print(f"[generate] motif: {len(residues)} fixed residues at design indices "
-          f"[{min(residues)}..{max(residues)}] from {m['source_pdb']} (contig {contig!r}{atom_note}{unindex_note})")
+    print(f"[generate] motif: {where} from {m['source_pdb']}{atom_note}")
     return spec, residues
 
 

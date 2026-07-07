@@ -29,6 +29,7 @@ CDDB_DIR="${CDDB_DIR:-/home/user1/projects/spa/training_data/proteina-atomistica
 INCOMPAT_ID="${INCOMPAT_ID:-A0A7S3EB45}"
 INCOMPAT_PDB="${INCOMPAT_PDB:-$CDDB_DIR/AF-${INCOMPAT_ID}-F1-model_v4_esmfold_v1.pdb}"
 ENV="${ENV:-spa-dev}"
+EVAL_CFG="${EVAL_CFG:-enzyme_tier0}"   # enzyme_tier0 (indexed shape B) | enzyme_tier0_shapeA (unindexed shape A)
 
 # --- stage the motif/compatible-prompt structure: cutinase 1CEX (public, ungated) --------------------
 mkdir -p "$INPUTS"
@@ -63,7 +64,7 @@ run_arm () {   # $1 = arm label, $2 = prompt G pdb
   local of3_out=()                  # OF3Refolder needs out_dir; it is per-arm so it's set here, not in OF3_OVR.
   [ "${#OF3_OVR[@]}" -gt 0 ] && of3_out=("+eval.flywheel.refolder.out_dir=$odir/of3")
   echo "[tier0] === arm=$arm  G=$gpdb  λ=$LAM_LIST  K=$K  -> $odir ==="
-  conda run -n "$ENV" python scripts/eval/run_flywheel.py eval=enzyme_tier0 \
+  conda run -n "$ENV" python scripts/eval/run_flywheel.py "eval=$EVAL_CFG" \
     eval.ckpt="$CKPT" \
     eval.motif.source_pdb="$CEX" \
     eval.prompt_pdb="$gpdb" \
