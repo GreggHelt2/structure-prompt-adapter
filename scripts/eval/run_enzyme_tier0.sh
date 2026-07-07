@@ -60,6 +60,8 @@ fi
 run_arm () {   # $1 = arm label, $2 = prompt G pdb
   local arm="$1" gpdb="$2"          # NOTE: separate `local` — `set -u` expands all args before assigning,
   local odir="$OUT/${STAGE}_${arm}" # so ${arm} must be set on a prior line before it is referenced here.
+  local of3_out=()                  # OF3Refolder needs out_dir; it is per-arm so it's set here, not in OF3_OVR.
+  [ "${#OF3_OVR[@]}" -gt 0 ] && of3_out=("+eval.flywheel.refolder.out_dir=$odir/of3")
   echo "[tier0] === arm=$arm  G=$gpdb  λ=$LAM_LIST  K=$K  -> $odir ==="
   conda run -n "$ENV" python scripts/eval/run_flywheel.py eval=enzyme_tier0 \
     eval.ckpt="$CKPT" \
@@ -68,7 +70,8 @@ run_arm () {   # $1 = arm label, $2 = prompt G pdb
     eval.lambda_scale="$LAM_LIST" \
     eval.num_designs="$K" \
     eval.out_dir="$odir" \
-    ${OF3_OVR[@]+"${OF3_OVR[@]}"}
+    ${OF3_OVR[@]+"${OF3_OVR[@]}"} \
+    ${of3_out[@]+"${of3_out[@]}"}
 }
 
 case "$ARM" in
