@@ -167,7 +167,7 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
     # used, so the indices match the design frame. None ⇒ no motif scored (unconditional evals unchanged).
     motif_score = None
     if cfg.eval.get("motif"):
-        from .generate import _parse_contig_motif
+        from .generate import _parse_contig_motif, motif_atom_spec
         from .score import _as_struct, source_positions
         m = cfg.eval.motif
         parsed = _parse_contig_motif(str(m["contig"]))               # [(design_idx, chain, author_resid), ...]
@@ -175,7 +175,15 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
         design_idx = [d for d, _ch, _r in parsed]
         # map the contig's author-numbered motif residues -> source positional Cα indices (review #1):
         src_pos = source_positions(source_struct, [(ch, r) for _d, ch, r in parsed])
-        motif_score = (source_struct, design_idx, src_pos)
+        atom_spec = motif_atom_spec(m)               # non-None only for an explicit per-residue tip-atom sel
+        if atom_spec:                                # atomic enzyme motif (dev 26 §8.1): score the FIXED atoms
+            n_atoms = sum(len(r["atoms"]) for r in atom_spec)
+            print(f"[flywheel] atomic (tip-atom) motif: scoring {n_atoms} fixed atoms over "
+                  f"{len(atom_spec)} residues via motif_atom_rmsd (dev 26 §8.6).")
+            motif_score = {"source": source_struct, "design_residues": design_idx,
+                           "source_residues": src_pos, "atom_spec": atom_spec}
+        else:
+            motif_score = (source_struct, design_idx, src_pos)
     elif cfg.eval.get("subregion"):
         # Sub-region "scaffolding" eval (dev 17 §7 / 16 §9.5): score the design's S region vs the
         # prompt structure's S region (self-aligned — design length == N == prompt length, so S indexes

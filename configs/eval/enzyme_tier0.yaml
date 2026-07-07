@@ -1,0 +1,34 @@
+# @package eval
+# Tier-0 ENZYME hard⊕soft eval — cutinase (1CEX) catalytic-triad TIP-atom motif ⊕ a foreign fold prompt.
+# Dev spec: docs/plan/26 §4 (Tier-0) + §8 (RFD3's real enzyme conditioning). Reuses the §4 hard⊕soft
+# flywheel with three additions (dev 26 §8.6): atom-level `fixed_atoms`, tip-atom motif-RMSD scoring, and
+# a FOREIGN-fold prompt (`self_prompt: false`) so SPA steers the whole scaffold toward G≠the motif source.
+#
+# Compose:  python scripts/eval/run_flywheel.py eval=enzyme_tier0 \
+#             eval.motif.source_pdb=<inputs>/1cex.pdb eval.prompt_pdb=<G>.pdb ckpt=<multigran ckpt>
+# The `run_enzyme_tier0.sh` driver runs both arms (compatible G=1CEX α/β-hydrolase, incompatible G=all-β).
+defaults:
+  - default        # inherit all Stage-1/2/4 knobs (proteinmpnn, score, flywheel, prompt, …)
+  - _self_         # then apply the Tier-0 overrides below
+
+# --- the hard motif: cutinase Ser120–Asp175–His188 catalytic triad, TIP atoms (dev 26 §8.1) -----------
+# 1CEX chain A is author-numbered 17–213 (NOT 1–197); the triad sits at design-frame positions 103/158/171,
+# so the contig reproduces cutinase's native spacing at L=197. Indexed (shape B) — no `unindex` yet; the
+# fully-unindexed shape A follows (dev 26 §8.6). Atom lists = the paper's tip-atom pattern (Ser hydroxyl,
+# Asp carboxylate, His imidazole). `select_fixed_atoms` is passed straight to RFD3 (input_parsing.py).
+motif:
+  source_pdb: null                              # SET by the driver (the staged 1cex.pdb path)
+  contig: "103,A120,54,A175,12,A188,25"         # 103 + Ser120 + 54 + Asp175 + 12 + His188 + 25 = L 197
+  fixed_atoms:
+    A120: "OG,CB,CA"                             # Ser nucleophile: hydroxyl + Cβ/Cα
+    A175: "CB,CG,OD1,OD2"                        # Asp: carboxylate + Cβ/Cγ
+    A188: "CB,CG,ND1,CD2,CE1,NE2"               # His: full imidazole + Cβ
+  self_prompt: false                            # FOREIGN-fold prompt (G ≠ source) → attend to all of G (#3)
+
+# --- the soft steer + sweep --------------------------------------------------------------------------
+conditions: [baseline, spa]                     # baseline = motif-only RFD3 (SPA off); spa = motif ⊕ SPA(G)
+lambda_scale: [0.0, 0.5, 1.0, 2.0]              # λ sweep (0 = identity gate; 1 free; 2 max-steer — dev 05 C8/C9)
+num_designs: 8                                  # K backbones (over-generate for the designability screen)
+seed: 0
+prompt_pdb: null                                # SET per-arm by the driver (compatible 1CEX / incompatible all-β)
+out_dir: ./outputs/eval/enzyme_tier0

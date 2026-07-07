@@ -364,6 +364,78 @@ def motif_rmsd(design_struct, motif_source, motif_residues, *, source_residues=N
     return ca_rmsd(s[si], d[di])
 
 
+def _residue_atom_coords(struct, chain, resid, atom_names):
+    """Coords ``[k, 3]`` (float64) for the named atoms of residue ``(chain, resid)``, in ``atom_names`` order.
+
+    Raises ``ValueError`` if the residue or any requested atom is absent — a missing atom must surface (the
+    caller logs + drops the design), never a silent wrong number.
+    """
+    import numpy as np
+
+    arr = _as_struct(struct)
+    sub = arr[(arr.chain_id == str(chain)) & (arr.res_id == int(resid))]
+    if len(sub) == 0:
+        raise ValueError(f"motif atom: residue {chain}{resid} absent from structure")
+    out = []
+    for name in atom_names:
+        hit = sub[sub.atom_name == str(name)]
+        if len(hit) == 0:
+            raise ValueError(f"motif atom: {chain}{resid}:{name} absent")
+        out.append(hit.coord[0])
+    return np.asarray(out, dtype="float64")
+
+
+def _design_residue_key(design_struct, design_idx):
+    """``(chain, res_id)`` of the design's ``design_idx``-th residue (0-based, Cα/file order)."""
+    ca = _ca_array(design_struct)
+    if design_idx < 0 or design_idx >= len(ca):
+        raise ValueError(f"motif atom: design index {design_idx} out of range (n={len(ca)})")
+    return str(ca.chain_id[design_idx]), int(ca.res_id[design_idx])
+
+
+def _kabsch_rmsd(P, Q) -> float:
+    """RMSD (Å) after optimal rigid superposition of ``Q`` onto ``P`` (both ``[N, 3]`` float64)."""
+    import numpy as np
+
+    Pc = P - P.mean(axis=0)
+    Qc = Q - Q.mean(axis=0)
+    H = Qc.T @ Pc
+    U, _s, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    R = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T          # rotation mapping Qc onto Pc
+    Qr = Qc @ R.T
+    return float(np.sqrt(np.mean(np.sum((Qr - Pc) ** 2, axis=1))))
+
+
+def motif_atom_rmsd(design_struct, motif_source, atom_spec) -> float:
+    """RMSD (Å) over the **fixed motif atoms** (tip/all-atom), Kabsch-superposed over just those atoms.
+
+    The right "is the atomic constraint satisfied?" metric when only sidechain *tip* atoms (not Cα) are
+    pinned: a tip-only motif does NOT hold Cα, so :func:`motif_rmsd` (Cα) would spuriously report large
+    (dev ``26`` §8.6). Measures the *same* atoms RFD3 fixed — matching the paper's AME motif all-atom RMSD
+    (§8.1). ``atom_spec`` is the list from :func:`spa.eval.generate.motif_atom_spec`: records
+    ``{design_idx (0-based positional), chain, resid, atoms:[names]}``. Design atoms are located by
+    positional residue index (:func:`_design_residue_key`), source atoms by author ``(chain, resid)`` — so a
+    non-self-aligned source PDB (the enzyme H) is scored against the right atoms. Design-side (backbone) it
+    checks the pin held; refold-side it checks the redesigned sequence still realizes the motif geometry.
+    Raises ``ValueError`` on an empty spec or a missing/mismatched atom (never a silent wrong answer).
+    """
+    import numpy as np
+
+    if not atom_spec:
+        raise ValueError("motif_atom_rmsd: empty atom_spec")
+    d_blocks, s_blocks = [], []
+    for rec in atom_spec:
+        ch_d, rid_d = _design_residue_key(design_struct, int(rec["design_idx"]))
+        d_blocks.append(_residue_atom_coords(design_struct, ch_d, rid_d, rec["atoms"]))
+        s_blocks.append(_residue_atom_coords(motif_source, rec["chain"], rec["resid"], rec["atoms"]))
+    D = np.concatenate(d_blocks, axis=0)
+    S = np.concatenate(s_blocks, axis=0)
+    if len(D) != len(S) or len(D) < 3:
+        raise ValueError(f"motif_atom_rmsd: matched-atom count {len(D)} vs {len(S)} (need equal, ≥3)")
+    return _kabsch_rmsd(S, D)                         # superpose the design's fixed atoms onto the source's
+
+
 def source_positions(source_struct, chain_resids) -> list[int]:
     """Positional Cα indices in ``source_struct`` for each ``(chain_id, author_resid)`` ref (dev ``14`` §3).
 
@@ -494,21 +566,32 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, c
         )
 
     if motif is not None:
-        if len(motif) == 3:                          # (source, design_residues, source_residues)
+        atom_spec = None
+        if isinstance(motif, dict):                  # atomic (tip-atom) motif payload (dev 26 §8.6)
+            source = motif["source"]
+            design_res = motif.get("design_residues")
+            source_res = motif.get("source_residues")
+            atom_spec = motif.get("atom_spec")
+        elif len(motif) == 3:                        # (source, design_residues, source_residues)
             source, design_res, source_res = motif
         else:                                        # (source, residues) — self-aligned (source_res defaults)
             source, design_res = motif
             source_res = None
+
+        def _mrmsd(struct):                          # tip/all-atom RMSD when atom_spec given, else Cα (§4)
+            if atom_spec:
+                return motif_atom_rmsd(struct, source, atom_spec)
+            return motif_rmsd(struct, source, design_res, source_residues=source_res)
+
         try:                                         # review #5: a bad source index must not abort the run
-            ds.motif_rmsd = motif_rmsd(design, source, design_res, source_residues=source_res)
+            ds.motif_rmsd = _mrmsd(design)
             ds.motif_satisfied = bool(ds.motif_rmsd < sc.motif_rmsd_cutoff)
         except Exception as e:
             print(f"[score] design-side motif_rmsd failed for {name}: {e}")
             ds.motif_rmsd, ds.motif_satisfied = None, None
         if refolds is not None and ds.best_refold_idx is not None and ds.best_refold_idx >= 0:
             try:  # the best refold may differ in length from the motif source (rare) -> leave None
-                ds.motif_rmsd_refold = motif_rmsd(refolds[ds.best_refold_idx], source, design_res,
-                                                  source_residues=source_res)
+                ds.motif_rmsd_refold = _mrmsd(refolds[ds.best_refold_idx])
             except Exception as e:
                 print(f"[score] refold-side motif_rmsd failed for {name}: {e}")  # review #7: log, don't swallow
                 ds.motif_rmsd_refold = None

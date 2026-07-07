@@ -275,20 +275,64 @@ def build_motif(cfg):
     m = cfg.eval.get("motif")
     if not m:
         return None, None
+    from omegaconf import OmegaConf
     from rfd3.inference.input_parsing import DesignInputSpecification
 
     contig = str(m["contig"])
     residues = _parse_contig_motif_indices(contig)
-    spec = DesignInputSpecification(
-        input=str(m["source_pdb"]),
-        contig=contig,
-        select_fixed_atoms=m.get("fixed_atoms", True),
-    )
+    # `fixed_atoms` selects which atoms of the motif residues RFD3 pins. Historically a bool (True = the
+    # §4 backbone-island path — all atoms of the contig residues). It may now also be a **per-residue atom
+    # selection** — a dict/str like {"A120":"OG,CB,CA","A188":"BKBN"} (RFD3 keywords ALL/BKBN/TIP or an
+    # explicit atom list) — to pin sidechain *tip* atoms for atomic enzyme-motif scaffolding (dev 26 §8.1;
+    # this is exactly foundry's own enzyme_design.json format). RFD3's before-validator coerces a dict via
+    # InputSelection.from_any (input_parsing.py:362); we convert an OmegaConf DictConfig to a plain dict so
+    # that coercion sees a real mapping. `unindex` (optional) lets RFD3 infer the motif residues' sequence
+    # position (the paper's atomic-motif mode; dev 26 §8.6 shape A) — omitted ⇒ indexed (shape B).
+    fixed_atoms = m.get("fixed_atoms", True)
+    if OmegaConf.is_config(fixed_atoms):
+        fixed_atoms = OmegaConf.to_container(fixed_atoms, resolve=True)
+    spec_kwargs = {"input": str(m["source_pdb"]), "contig": contig, "select_fixed_atoms": fixed_atoms}
+    if m.get("unindex"):
+        spec_kwargs["unindex"] = str(m["unindex"])
+    spec = DesignInputSpecification(**spec_kwargs)
     if cfg.eval.get("length") is not None:
         print("[generate] motif active -> design length is set by eval.motif.contig; eval.length ignored.")
+    atom_note = "" if not isinstance(fixed_atoms, dict) else f", atom-level ({len(fixed_atoms)} sel)"
+    unindex_note = f", unindex={spec_kwargs['unindex']}" if "unindex" in spec_kwargs else ""
     print(f"[generate] motif: {len(residues)} fixed residues at design indices "
-          f"[{min(residues)}..{max(residues)}] from {m['source_pdb']} (contig {contig!r})")
+          f"[{min(residues)}..{max(residues)}] from {m['source_pdb']} (contig {contig!r}{atom_note}{unindex_note})")
     return spec, residues
+
+
+def motif_atom_spec(cfg_motif):
+    """Per-fixed-atom scoring spec for an atomic (tip-atom) motif, or ``None`` for the bool/keyword path.
+
+    Returns a list of records ``{"design_idx": int, "chain": str, "resid": int, "atoms": [names]}`` — one
+    per motif residue carrying an **explicit** atom list in ``fixed_atoms`` — pairing the design-frame index
+    (from the contig walk, :func:`_parse_contig_motif`) with the source ``(chain, author-resid)`` and the
+    exact atom names RFD3 pinned. Consumed by :func:`spa.eval.score.motif_atom_rmsd` so scoring measures the
+    *same* atoms the model held (dev 26 §8.6, item 2). Returns ``None`` (⇒ the caller keeps the Cα
+    ``motif_rmsd``) unless **every** contig motif residue has an explicit comma-atom list — a keyword
+    selector (ALL/BKBN/TIP) or an unlisted/range residue names no fixed atom set to score against.
+    """
+    from omegaconf import OmegaConf
+
+    fa = cfg_motif.get("fixed_atoms")
+    if OmegaConf.is_config(fa):
+        fa = OmegaConf.to_container(fa, resolve=True)
+    if not isinstance(fa, dict):
+        return None
+    parsed = _parse_contig_motif(str(cfg_motif["contig"]))     # [(design_idx, chain, author_resid), ...]
+    spec = []
+    for design_idx, chain, resid in parsed:
+        val = fa.get(f"{chain}{resid}")
+        if not isinstance(val, str) or val.strip().upper() in ("ALL", "BKBN", "TIP", ""):
+            return None                                        # not an explicit atom list -> Cα scoring path
+        atoms = [a.strip() for a in val.split(",") if a.strip()]
+        if not atoms:
+            return None
+        spec.append({"design_idx": int(design_idx), "chain": str(chain), "resid": int(resid), "atoms": atoms})
+    return spec or None
 
 
 # --------------------------------------------------------------------------------------------------
@@ -524,7 +568,12 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     prompt_mask = None
     if any(c in ("spa", "shuffle") for c in conditions):
         p = resolve_prompt(cfg, device)              # [N, c_kv]
-        if motif_residues is not None:               # non-overlap: SPA attends to the scaffold rows only (§2)
+        # `self_prompt` (default True) = the §4 hard⊕soft case: the SPA prompt IS the motif's own structure
+        # (N == L), so the motif rows are masked out of the prompt (non-overlap, §7.2). `self_prompt=False`
+        # = a FOREIGN fold prompt G that does not contain the motif (dev 26 §8.6 change #3) — see the elif.
+        motif_self_prompt = (bool(cfg.eval.motif.get("self_prompt", True))
+                             if cfg.eval.get("motif") else True)
+        if motif_residues is not None and motif_self_prompt:  # non-overlap: SPA attends to scaffold rows only (§2)
             N = p.shape[0]
             contig = str(cfg.eval.motif["contig"])
             L = _contig_length(contig)
@@ -547,6 +596,13 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
             prompt_mask = torch.zeros(K, N, dtype=torch.bool, device=device)
             prompt_mask[:, motif_residues] = True
             print(f"[generate] SPA prompt-mask: {len(motif_residues)} motif rows masked of N={N} (non-overlap).")
+        elif motif_residues is not None:             # foreign-fold prompt (self_prompt=False; dev 26 §8.6 #3):
+            # SPA steers the scaffold toward a WHOLE foreign fold G that does NOT contain the motif, so there
+            # are no motif rows to mask (the §7.2 non-overlap is moot) and N=|G| need not equal L. RFD3 still
+            # pins the motif on the design side regardless (revealed coords); SPA attends to all of G. Leaving
+            # prompt_mask = None ⇒ the full prompt is used; cross-attention handles N ≠ L (as localization does).
+            print(f"[generate] SPA foreign-fold prompt (self_prompt=False): attending to all N={p.shape[0]} "
+                  f"prompt rows; motif pinned design-side, no non-overlap mask (dev 26 §8.6).")
         elif subregion is not None:                  # sub-region scaffolding: SPA attends to S's rows only
             prompt_mask = subregion_key_padding_mask(subregion, p.shape[0], K, device)
         if "spa" in conditions:

@@ -432,3 +432,95 @@ def test_source_positions_and_3tuple_non_self_aligned():
     # missing ref -> ValueError naming it
     with pytest.raises(ValueError):
         source_positions(source, [("A", 999)])
+
+
+# --------------------------------------------------------------------------------------------------
+# Atomic (tip-atom) motif — motif_atom_rmsd + motif_atom_spec (dev 26 §8.6, enzyme Tier-0)
+# --------------------------------------------------------------------------------------------------
+
+
+def _make_residues(specs):
+    """AtomArray from ``specs`` = [(res_id, res_name, [(atom_name, coord), ...]), ...] — multi-atom residues
+    (each carries a CA so ``_ca_array`` / ``_design_residue_key`` work)."""
+    from biotite.structure import Atom, array
+
+    atoms = []
+    for res_id, res_name, atom_list in specs:
+        for atom_name, coord in atom_list:
+            atoms.append(Atom(coord, chain_id="A", res_id=res_id, res_name=res_name,
+                              atom_name=atom_name, element=atom_name[0]))
+    return array(atoms)
+
+
+def _triad_struct(shift=(0.0, 0.0, 0.0)):
+    """Three Ser-like residues (res_id 5,6,7), each CA/CB/OG — a stand-in tip-atom motif, optionally moved."""
+    import numpy as np
+
+    s = np.asarray(shift, dtype=float)
+    base = {
+        5: [("CA", [0.0, 0.0, 0.0]), ("CB", [1.5, 0.0, 0.0]), ("OG", [2.4, 1.0, 0.0])],
+        6: [("CA", [3.8, 0.0, 0.0]), ("CB", [5.0, 0.5, 0.0]), ("OG", [6.0, 1.3, 0.0])],
+        7: [("CA", [7.5, 0.0, 0.0]), ("CB", [8.6, -0.4, 0.0]), ("OG", [9.7, 0.8, 0.0])],
+    }
+    return _make_residues([(rid, "SER", [(an, np.asarray(c) + s) for an, c in al]) for rid, al in base.items()])
+
+
+def _tip_spec():
+    return [{"design_idx": i, "chain": "A", "resid": 5 + i, "atoms": ["CA", "CB", "OG"]} for i in range(3)]
+
+
+def test_motif_atom_rmsd_self_rigid_and_perturbation():
+    import numpy as np
+
+    from spa.eval.score import motif_atom_rmsd
+
+    src = _triad_struct()
+    spec = _tip_spec()
+    assert motif_atom_rmsd(src, src, spec) == pytest.approx(0.0, abs=1e-6)          # self
+    assert motif_atom_rmsd(_triad_struct(shift=(12.3, -4.1, 7.7)), src, spec) == pytest.approx(0.0, abs=1e-4)  # rigid
+    des = _triad_struct()                                                            # push one atom 1 Å
+    m = (des.chain_id == "A") & (des.res_id == 7) & (des.atom_name == "OG")
+    des.coord[m] = des.coord[m] + np.array([1.0, 0.0, 0.0])
+    assert 0.1 < motif_atom_rmsd(des, src, spec) < 0.5                               # 1 of 9 atoms moved 1 Å
+
+
+def test_motif_atom_rmsd_missing_atom_raises():
+    from spa.eval.score import motif_atom_rmsd
+
+    src = _triad_struct()
+    bad = [{"design_idx": 0, "chain": "A", "resid": 5, "atoms": ["ZZ"]},            # ZZ absent
+           {"design_idx": 1, "chain": "A", "resid": 6, "atoms": ["CA"]},
+           {"design_idx": 2, "chain": "A", "resid": 7, "atoms": ["CA"]}]
+    with pytest.raises(ValueError):
+        motif_atom_rmsd(src, src, bad)
+
+
+def test_motif_atom_spec_from_fixed_atoms_dict():
+    from omegaconf import OmegaConf
+
+    from spa.eval.generate import motif_atom_spec
+
+    cfg_m = OmegaConf.create({"contig": "4,A5,2,A6,2,A7,3",
+                              "fixed_atoms": {"A5": "CA,CB,OG", "A6": "CA", "A7": "CA"}})
+    spec = motif_atom_spec(cfg_m)
+    assert spec is not None and len(spec) == 3
+    assert spec[0] == {"design_idx": 4, "chain": "A", "resid": 5, "atoms": ["CA", "CB", "OG"]}
+    assert [r["design_idx"] for r in spec] == [4, 7, 10]                             # contig walk
+    # keyword selector or bool -> None (Cα scoring fallback)
+    assert motif_atom_spec(OmegaConf.create(
+        {"contig": "4,A5,2,A6,2,A7,3", "fixed_atoms": {"A5": "TIP", "A6": "CA", "A7": "CA"}})) is None
+    assert motif_atom_spec(OmegaConf.create({"contig": "4,A5,3", "fixed_atoms": True})) is None
+
+
+def test_score_design_atomic_motif_dict_payload():
+    from types import SimpleNamespace
+
+    from spa.eval.score import score_design
+
+    src = _triad_struct()
+    des = _triad_struct(shift=(2.0, 0.0, 0.0))                                       # rigid -> pin satisfied
+    dz = SimpleNamespace(atom_array=des, path="x/spa_design_0.pdb",
+                         condition="spa", lambda_scale=1.0, n_residues=3)
+    ds = score_design(dz, motif={"source": src, "design_residues": [0, 1, 2],
+                                 "source_residues": [0, 1, 2], "atom_spec": _tip_spec()})
+    assert ds.motif_rmsd == pytest.approx(0.0, abs=1e-4) and ds.motif_satisfied is True
