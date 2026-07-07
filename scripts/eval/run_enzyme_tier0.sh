@@ -58,7 +58,8 @@ if [ "$STAGE" = "designability" ]; then
 fi
 
 run_arm () {   # $1 = arm label, $2 = prompt G pdb
-  local arm="$1" gpdb="$2" odir="$OUT/${STAGE}_${arm}"
+  local arm="$1" gpdb="$2"          # NOTE: separate `local` — `set -u` expands all args before assigning,
+  local odir="$OUT/${STAGE}_${arm}" # so ${arm} must be set on a prior line before it is referenced here.
   echo "[tier0] === arm=$arm  G=$gpdb  λ=$LAM_LIST  K=$K  -> $odir ==="
   conda run -n "$ENV" python scripts/eval/run_flywheel.py eval=enzyme_tier0 \
     eval.ckpt="$CKPT" \
@@ -67,7 +68,7 @@ run_arm () {   # $1 = arm label, $2 = prompt G pdb
     eval.lambda_scale="$LAM_LIST" \
     eval.num_designs="$K" \
     eval.out_dir="$odir" \
-    "${OF3_OVR[@]}"
+    ${OF3_OVR[@]+"${OF3_OVR[@]}"}
 }
 
 case "$ARM" in
