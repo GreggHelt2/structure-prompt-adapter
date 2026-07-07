@@ -298,10 +298,17 @@ def _single(batch):
     return batch[0]
 
 
-def _length_stratified_sampler(rows, n_bins, generator):
+def _length_stratified_sampler(rows, n_bins, generator, replacement=True):
     """``WeightedRandomSampler`` with inverse-bin-frequency weights over equal-width length bins, so
     each length band is drawn ~equally often (balanced size coverage for a sub-epoch budget; dev
-    ``04`` §11). ``replacement=True`` upsamples rare (long) lengths."""
+    ``04`` §11).
+
+    ``replacement=True`` (default — the original recipe) upsamples rare (long) lengths and re-draws
+    structures i.i.d. across the run (~28% unique coverage over a 30k sub-epoch; dev ``28`` §2).
+    ``replacement=False`` draws a **weighted WITHOUT-replacement** pass — each structure at most once per
+    epoch — **maximizing unique coverage per optimizer step**, for *extending* a sub-epoch run onto the
+    unseen remainder of the train set. Selected by ``cfg.train.sample_with_replacement`` (absent ⇒ True;
+    backward-compatible). ``num_samples=n`` is valid for both (all bin weights are positive)."""
     import numpy as np
     from torch.utils.data import WeightedRandomSampler
 
@@ -316,7 +323,7 @@ def _length_stratified_sampler(rows, n_bins, generator):
         counts = np.bincount(b, minlength=n_bins).astype(np.float64)
         weights = 1.0 / counts[b]
     return WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double),
-                                 num_samples=n, replacement=True, generator=generator)
+                                 num_samples=n, replacement=bool(replacement), generator=generator)
 
 
 def _example_stream(cfg, engine, net, device):
@@ -343,11 +350,12 @@ def _example_stream(cfg, engine, net, device):
         kind = str(cfg.train.get("sampler", "stratified")).lower()
         if kind == "stratified":
             g = torch.Generator().manual_seed(int(cfg.train.get("seed", 0)))
-            sampler = _length_stratified_sampler(ds.rows, int(cfg.train.get("sampler_bins", 20)), g)
+            repl = bool(cfg.train.get("sample_with_replacement", True))   # dev 28 §2: False = unique-coverage extend
+            sampler = _length_stratified_sampler(ds.rows, int(cfg.train.get("sampler_bins", 20)), g, replacement=repl)
             loader = DataLoader(ds, batch_size=1, sampler=sampler, collate_fn=_single,
                                 num_workers=nw, persistent_workers=nw > 0)
-            print(f"sampler=stratified over {len(ds)} structures, "
-                  f"{int(cfg.train.get('sampler_bins', 20))} length bins")
+            print(f"sampler=stratified ({'with' if repl else 'WITHOUT'}-replacement) over {len(ds)} "
+                  f"structures, {int(cfg.train.get('sampler_bins', 20))} length bins")
         else:
             loader = DataLoader(ds, batch_size=1, shuffle=True, collate_fn=_single,
                                 num_workers=nw, persistent_workers=nw > 0)

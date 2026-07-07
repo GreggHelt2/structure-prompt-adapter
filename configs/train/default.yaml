@@ -30,6 +30,9 @@ num_workers: 2         # data=cddb dataloader workers for live featurization (de
                        # behind the GPU step — live featurization, no second cache)
 sampler: stratified    # stratified (length-balanced WeightedRandomSampler) | random (uniform shuffle); dev 04 §11
 sampler_bins: 20       # equal-width length bins for the stratified sampler
+sample_with_replacement: true   # true (default, original recipe): i.i.d. draws (a 30k sub-epoch covers ~28% of
+                                #   the train set). false: WITHOUT-replacement pass — each structure ≤once/epoch,
+                                #   MAX unique coverage per step; use when EXTENDING a sub-epoch onto unseen data (dev 28 §2)
 capture_length: 24     # toy-overfit only: residue length for the synthetic-example capture run
 synthetic_target_offset: 3.0  # toy-overfit only: artificial target = vanilla output + this·N(0,1) Å
 
