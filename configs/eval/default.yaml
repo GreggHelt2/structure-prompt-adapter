@@ -35,7 +35,9 @@ out_dir: ./outputs/eval/generate   # relative -> resolved against the original c
 proteinmpnn:
   num_seqs: 8              # N sequences per backbone (best-of-8 self-consistency set; primary cost lever)
   sampling_temp: 0.1      # ProteinMPNN sampling temperature (0.1 default; higher -> more diverse seqs)
-  seed: 0                 # ProteinMPNN RNG seed (reproducible sequence sampling)
+  seed: 42                # ProteinMPNN RNG seed. MUST be non-zero: ProteinMPNN's `if args.seed:` treats
+                          # 0 as falsy -> a fresh RANDOM seed each run -> best-of-N designability noise,
+                          # NOT reproducible (discovered results/05 E8, 2026-07-05). 42 = fixed/reproducible.
   batch_size: 1           # must divide num_seqs (ProteinMPNN: NUM_BATCHES = num_seqs // batch_size)
   model_name: v_48_020    # bundled vanilla weights (dev 05 Stage 2 default; v_48_002/010/020/030)
   weights_dir: null       # null -> <paths.proteinmpnn_repo>/vanilla_model_weights (bundled default)
