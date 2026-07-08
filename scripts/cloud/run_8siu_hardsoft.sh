@@ -6,10 +6,14 @@
 #
 # WHY THIS IS SEPARATE FROM run_b4_hardsoft.sh (two reasons):
 #   1) 8SIU was EXCLUDED from the b4 hard⊕soft sweep because its pre-staged ESM3 .pt didn't match the
-#      cleaned chain length (N != ptN). THE FIX: build the SPA prompt at RUNTIME from the cleaned PDB via
+#      cleaned chain length (N != ptN); worse, the raw b4/prep/8SIU.pdb is a raw crystal structure (chain A
+#      numbered −2..647 with gaps + HOH/MSE/SO4 hetero), so the carved contig hit nonexistent residues and
+#      the negative resid broke build_motif's `A-2` parse (job 8889634386257903616 FAILED there). THE FIX:
+#      a CLEANED PDB (gs://…/eval/8siu_hardsoft/8SIU_clean.pdb — single chain A, polymer-only, MSE→MET,
+#      waters/ions dropped, renumbered 1..368 contiguous) + build the SPA prompt at RUNTIME from it via
 #      eval.prompt_pdb (runtime ESM3 on the exact chain), NOT a cached .pt — so the prompt length N equals
-#      the contig design length L by construction (see the contig ↓, Σ = 368 = 8SIU chain length). This is
-#      the self_prompt (§4) hard⊕soft case: the SPA prompt IS 8SIU's own structure (N==L), motif rows
+#      the contig design length L by construction (contig ↓, Σ = 368) and the contig lands on real residues.
+#      This is the self_prompt (§4) hard⊕soft case: the SPA prompt IS 8SIU's own structure (N==L), motif rows
 #      masked out of the prompt (non-overlap) → the per-residue identity projector, i.e. N×1536 (variant C) only.
 #   2) 368 res > the A5000 OF3 ≤256-res ceiling, so designability MUST run on the H100 with OF3 NOKERNEL
 #      (combined image, calibrated to 384 res; the triton kernels are avoided here — of3_nokernel.yml).
@@ -21,7 +25,7 @@ set -uo pipefail
 
 PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
-PROMPT_PDB_URI="${PROMPT_PDB_URI:-$BUCKET/eval/b4/prep/8SIU.pdb}"    # cleaned 368-res chain; runtime ESM3 → [368,1536]
+PROMPT_PDB_URI="${PROMPT_PDB_URI:-$BUCKET/eval/8siu_hardsoft/8SIU_clean.pdb}"  # CLEANED single chain A, polymer-only (MSE→MET, waters/ions dropped), renumbered 1..368 contiguous; runtime ESM3 → [368,1536]
 RESULTS_URI="${RESULTS_URI:-$BUCKET/eval/8siu_hardsoft}"
 RFD3_CKPT_URI="${RFD3_CKPT_URI:-$BUCKET/weights/rfd3_latest.ckpt}"
 OF3_CKPT_URI="${OF3_CKPT_URI:-$BUCKET/weights/of3-p2-155k.pt}"
