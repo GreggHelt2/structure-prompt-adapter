@@ -141,6 +141,11 @@ def run_two_steer(args):
 
     cells = _parse_cells(args.cells)
     lam = float(args.lambda_scale)
+    # per-region effective λ (effective λ at residue i = λ_scale · profile[i]); fold the per-region λ
+    # INTO the mask and keep λ_scale=1, so R1 and R2 can be driven at different strengths (dev: β needs
+    # more push than α). Default = the global λ on both.
+    lr1 = float(args.r1_lambda) if args.r1_lambda is not None else lam
+    lr2 = float(args.r2_lambda) if args.r2_lambda is not None else lam
     K = int(args.num_designs)
     r1_len, r2_len = int(args.r1_len), int(args.r2_len)
     motif_pdb = _resolve_pdb(args.motif_source, args.pdb_dir)
@@ -190,8 +195,8 @@ def run_two_steer(args):
     adtype = next(adapter.parameters()).dtype
     prompt1 = p1[None].expand(K, -1, -1).to(device=dev, dtype=adtype).contiguous()
     prompt2 = p2[None].expand(K, -1, -1).to(device=dev, dtype=adtype).contiguous()
-    prof_R1 = _profile(L, R1_idx, dev)                                       # 1 on R1, 0 elsewhere
-    prof_R2 = _profile(L, R2_idx, dev)                                       # 1 on R2, 0 elsewhere (disjoint)
+    prof_R1 = lr1 * _profile(L, R1_idx, dev)                                 # effective λ = lr1 on R1 (0 elsewhere)
+    prof_R2 = lr2 * _profile(L, R2_idx, dev)                                 # effective λ = lr2 on R2 (disjoint)
     prompt_of = {"g1": prompt1, "g2": prompt2}
 
     edir = out_dir / f"{args.motif_source}_{args.g1}x{args.g2}_R1{r1_len}M{len(M_idx)}R2{r2_len}"
@@ -205,7 +210,7 @@ def run_two_steer(args):
         if t2 != "free":
             slots.append((prompt_of[t2], prof_R2))
         if slots:
-            adapter.set_prompts(slots); adapter.set_scale(lam)
+            adapter.set_prompts(slots); adapter.set_scale(1.0)   # per-region λ is folded into the profiles
         else:
             adapter.clear_prompt(); adapter.set_profile(None)               # free:free baseline
         cname = f"{t1}_{t2}"
@@ -272,7 +277,9 @@ def main():
     ap.add_argument("--r1-len", type=int, default=90, help="|R1| — the R1 flank length (≈ |G1|)")
     ap.add_argument("--g2", default="A0A7C6QMG4", help="fold G2 for flank R2 (CDDB uniprot id or PDB path)")
     ap.add_argument("--r2-len", type=int, default=47, help="|R2| — the R2 flank length (≈ |G2|)")
-    ap.add_argument("--lambda", dest="lambda_scale", type=float, default=2.0, help="SPA strength λ (global)")
+    ap.add_argument("--lambda", dest="lambda_scale", type=float, default=2.0, help="SPA strength λ (global, both regions)")
+    ap.add_argument("--r1-lambda", type=float, default=None, help="per-region effective λ on R1 (overrides --lambda for R1; effective λ = λ·mask)")
+    ap.add_argument("--r2-lambda", type=float, default=None, help="per-region effective λ on R2 (overrides --lambda for R2)")
     ap.add_argument("--cells", default="free:free,g1:g2,g2:g1,g1:g1,g2:g2,g1:free,free:g2",
                     help="comma list of R1:R2 target pairs; each side ∈ {free,g1,g2}. free:free is forced first.")
     ap.add_argument("--num-designs", type=int, default=8, help="K designs (paired noise)")
