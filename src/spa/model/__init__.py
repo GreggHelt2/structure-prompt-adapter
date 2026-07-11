@@ -3,13 +3,14 @@
 from .cross_attention import SPACrossAttention, SPAPromptKV
 from .loader import attach_spa, freeze_host
 from .projectors import IdentityProjector, make_projector
-from .wrapper import SPAAdapter, SPAContext, SPAWrappedAttention
+from .wrapper import SPAAdapter, SPAContext, SPAPromptSlot, SPAWrappedAttention
 
 __all__ = [
     "SPACrossAttention",
     "SPAPromptKV",
     "SPAWrappedAttention",
     "SPAContext",
+    "SPAPromptSlot",
     "SPAAdapter",
     "IdentityProjector",
     "make_projector",

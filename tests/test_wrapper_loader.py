@@ -11,7 +11,7 @@ import torch
 from omegaconf import OmegaConf
 from torch import nn
 
-from spa.model import SPAWrappedAttention, attach_spa
+from spa.model import SPACrossAttention, SPAWrappedAttention, attach_spa
 
 D, I, N, C_QUERY, C_KV = 2, 9, 6, 768, 1536
 N_BLOCKS = 18
@@ -266,3 +266,99 @@ def test_variant_b_grows_in_and_drops_mismatched_mask():
     assert adapter.context.key_padding_mask is None             # N-mask can't fit 4 tokens -> dropped
     out = model.run_blocks(A_I)
     assert not torch.allclose(vanilla, out) and torch.isfinite(out).all()
+
+
+# --- Multi-prompt (two-steer) ----------------------------------------------------------------------
+# The N×1536 (variant-C identity) path can hold several prompts, each gated by a DISJOINT per-residue
+# region profile, so two chain regions steer toward two different target folds (dev: two-steer driver).
+
+
+def _grow_in(adapter):
+    for ca in adapter.cross_attn:                # simulate a grown-in Wo after training
+        nn.init.xavier_uniform_(ca.to_out.weight)
+
+
+def test_cross_attention_profile_arg_matches_set_profile():
+    # The per-call `profile` arg (multi-prompt path) must be identical to stashing it via set_profile.
+    torch.manual_seed(0)
+    ca = SPACrossAttention(c_query=C_QUERY, c_model=768, n_head=8)
+    nn.init.xavier_uniform_(ca.to_out.weight)
+    nn.init.uniform_(ca.to_out.bias)
+    q = torch.randn(D, I, C_QUERY)
+    k, v = torch.randn(D, N, 768), torch.randn(D, N, 768)   # already projected to c_model
+    prof = torch.rand(I)
+    via_arg = ca(q, k, v, profile=prof)
+    ca.set_profile(prof)
+    assert torch.allclose(via_arg, ca(q, k, v), atol=1e-6)
+
+
+def test_set_prompts_loop_and_sum_at_block():
+    # A wrapped block with two prompts returns base + Σₖ SPA(·, Gₖ, profileₖ).
+    torch.manual_seed(0)
+    model = FakeRFD3()
+    adapter = attach_spa(model, _cfg())
+    _grow_in(adapter)
+    wrapper = model.diffusion_module.diffusion_transformer.blocks[0].attention_pair_bias
+    spa = wrapper.spa
+    prof1 = torch.zeros(I); prof1[: I // 2] = 1.0
+    prof2 = torch.zeros(I); prof2[I // 2 :] = 1.0            # disjoint from prof1
+    adapter.set_prompts([(torch.randn(D, N, C_KV), prof1), (torch.randn(D, N + 1, C_KV), prof2)])
+    Q = torch.randn(D, I, C_QUERY)
+    got = wrapper(Q)
+    s = adapter.context.prompts
+    man = (wrapper.orig(Q)
+           + spa(Q, s[0].k, s[0].v, profile=s[0].profile)
+           + spa(Q, s[1].k, s[1].v, profile=s[1].profile))
+    assert torch.allclose(got, man, atol=1e-6)
+
+
+def test_disjoint_two_steer_matches_single_per_region():
+    # With disjoint binary profiles, each region's output equals steering that region alone —
+    # mutual exclusivity by construction (region-1 rows == G1-only, region-2 rows == G2-only).
+    torch.manual_seed(1)
+    model = FakeRFD3()
+    adapter = attach_spa(model, _cfg())
+    _grow_in(adapter)
+    wrapper = model.diffusion_module.diffusion_transformer.blocks[0].attention_pair_bias
+    Q = torch.randn(D, I, C_QUERY)
+    G1, G2 = torch.randn(D, N, C_KV), torch.randn(D, N, C_KV)
+    r1, r2 = slice(0, I // 2), slice(I // 2, I)
+    prof1 = torch.zeros(I); prof1[r1] = 1.0
+    prof2 = torch.zeros(I); prof2[r2] = 1.0
+
+    adapter.set_prompts([(G1, prof1), (G2, prof2)])
+    two = wrapper(Q)
+    adapter.set_prompt(G1); adapter.set_profile(prof1)
+    s1 = wrapper(Q)
+    adapter.set_prompt(G2); adapter.set_profile(prof2)
+    s2 = wrapper(Q)
+
+    assert torch.allclose(two[:, r1, :], s1[:, r1, :], atol=1e-6)
+    assert torch.allclose(two[:, r2, :], s2[:, r2, :], atol=1e-6)
+
+
+def test_set_prompts_identity_at_init():
+    # Zero-init Wo => every prompt's SPA term is exactly 0, so two-steer still reproduces vanilla.
+    model = FakeRFD3()
+    A_I = torch.randn(D, I, C_QUERY)
+    vanilla = model.run_blocks(A_I)
+    adapter = attach_spa(model, _cfg())
+    prof1 = torch.zeros(I); prof1[: I // 2] = 1.0
+    prof2 = torch.zeros(I); prof2[I // 2 :] = 1.0
+    adapter.set_prompts([(torch.randn(D, N, C_KV), prof1), (torch.randn(D, N, C_KV), prof2)])
+    assert torch.equal(vanilla, model.run_blocks(A_I))
+
+
+def test_prompt_setters_are_mutually_exclusive():
+    # single- and multi-prompt slots never coexist; clear_prompt drops both.
+    adapter = attach_spa(FakeRFD3(), _cfg())
+    prof = torch.ones(I)
+    adapter.set_prompt(torch.randn(D, N, C_KV))
+    assert adapter.context.k is not None and adapter.context.prompts is None
+    adapter.set_prompts([(torch.randn(D, N, C_KV), prof)])
+    assert adapter.context.prompts is not None and adapter.context.k is None
+    adapter.set_prompt(torch.randn(D, N, C_KV))          # single supersedes multi
+    assert adapter.context.prompts is None and adapter.context.k is not None
+    adapter.set_prompts([(torch.randn(D, N, C_KV), prof)])
+    adapter.clear_prompt()
+    assert adapter.context.k is None and adapter.context.prompts is None

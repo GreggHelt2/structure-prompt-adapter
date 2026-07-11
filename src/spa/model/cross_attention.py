@@ -149,6 +149,7 @@ class SPACrossAttention(nn.Module):
         k: torch.Tensor,
         v: torch.Tensor,
         key_padding_mask: torch.Tensor | None = None,
+        profile: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute the SPA term.
 
@@ -158,6 +159,11 @@ class SPACrossAttention(nn.Module):
             v: prompt values ``[D, M, c_model]``.
             key_padding_mask: optional ``[D, M]`` boolean mask, ``True`` at PAD prompt positions
                 to be ignored (PyTorch ``nn.MultiheadAttention`` convention).
+            profile: optional per-call per-residue λ weight ``[I]`` in ``[0, 1]``. When given it
+                **overrides** the module's stored :attr:`lambda_profile` for this call — the
+                multi-prompt (two-steer) path passes a distinct disjoint region mask per prompt so
+                the one shared per-block module can serve every prompt (dev: two-steer driver).
+                ``None`` -> fall back to :attr:`lambda_profile` (the single-prompt behavior).
 
         Returns:
             ``[D, I, c_query]`` — ``λ · Wo · attn``; exactly zero at init.
@@ -180,11 +186,13 @@ class SPACrossAttention(nn.Module):
         # Cast λ to out's dtype so the term stays in the host's compute dtype (e.g. bf16 under
         # autocast); an fp32 λ would promote base+spa to fp32 and break the identity gate.
         term = out * self.lambda_scale.to(out.dtype)                                  # [D,I,c_query]
-        if self.lambda_profile is not None:
-            if self.lambda_profile.shape[-1] != I:
+        # A per-call `profile` (multi-prompt two-steer) overrides the stored lambda_profile.
+        prof = profile if profile is not None else self.lambda_profile
+        if prof is not None:
+            if prof.shape[-1] != I:
                 raise ValueError(
-                    f"lambda_profile length {self.lambda_profile.shape[-1]} != query length {I}"
+                    f"profile length {prof.shape[-1]} != query length {I}"
                 )
             # per-residue region weight [I] -> broadcast over batch + feature: [1,I,1]
-            term = term * self.lambda_profile.to(out.device, out.dtype).view(1, -1, 1)
+            term = term * prof.to(out.device, out.dtype).view(1, -1, 1)
         return term

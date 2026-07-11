@@ -28,21 +28,50 @@ from torch import nn
 
 
 @dataclass
+class SPAPromptSlot:
+    """One prompt in a multi-prompt (two-steer) design: its projected K/V + a disjoint region mask.
+
+    The single-prompt path uses :class:`SPAContext`'s ``k``/``v`` directly; the two-steer path
+    instead stashes a *list* of these slots (``SPAContext.prompts``) and the wrapper loops-and-sums
+    ``Σₖ SPA(A, Gₖ)·profileₖ``. Because the ``profile`` masks are **disjoint** (region U₁ vs U₂,
+    with the pinned motif + free region 0 in every mask) each design residue receives at most one
+    prompt's contribution — mutual exclusivity by construction (dev: two-steer driver).
+
+    Attributes:
+        k: this prompt's keys ``[D, Mₖ, c_model]`` (Mₖ = |Gₖ| tokens; may differ across slots).
+        v: this prompt's values ``[D, Mₖ, c_model]``.
+        profile: per-residue λ mask ``[I]`` in ``[0, 1]`` selecting this prompt's region (or ``None``
+            = every design residue, i.e. a uniform steer).
+        key_padding_mask: optional ``[D, Mₖ]`` boolean (``True`` at PAD prompt positions) or ``None``.
+    """
+
+    k: torch.Tensor
+    v: torch.Tensor
+    profile: torch.Tensor | None = None
+    key_padding_mask: torch.Tensor | None = None
+
+
+@dataclass
 class SPAContext:
     """Shared side-channel holding the projected prompt K/V (and key-padding mask).
 
     Computed once per design (the prompt is constant across blocks and diffusion steps) and read
-    by every wrapper. ``k is None`` ⇒ wrapped-but-unconditioned (== vanilla RFD3).
+    by every wrapper. ``k is None`` (and ``prompts is None``) ⇒ wrapped-but-unconditioned
+    (== vanilla RFD3).
 
     Attributes:
         k: shared prompt keys ``[D, M, c_model]`` (or ``None``).
         v: shared prompt values ``[D, M, c_model]`` (or ``None``).
         key_padding_mask: ``[D, M]`` boolean (``True`` at PAD prompt positions) or ``None``.
+        prompts: optional list of :class:`SPAPromptSlot` for a multi-prompt (two-steer) design.
+            When set it takes precedence over ``k``/``v`` and the wrapper sums over the slots;
+            ``None`` ⇒ the ordinary single-prompt path.
     """
 
     k: torch.Tensor | None = None
     v: torch.Tensor | None = None
     key_padding_mask: torch.Tensor | None = None
+    prompts: list["SPAPromptSlot"] | None = None
 
 
 class SPAWrappedAttention(nn.Module):
@@ -74,7 +103,18 @@ class SPAWrappedAttention(nn.Module):
         base = self.orig(Q_L, C_L, P_LL, *args, **kwargs)
 
         ctx = self._context
-        if ctx is None or ctx.k is None:
+        if ctx is None:
+            return base  # wrapped-no-prompt == vanilla RFD3
+        if ctx.prompts is not None:
+            # Multi-prompt (two-steer): sum each prompt's SPA term, gated by its disjoint region
+            # profile. λ (set_scale) is global; the profiles route each prompt to its own region.
+            spa_sum = None
+            for slot in ctx.prompts:
+                term = self.spa(Q_L, slot.k, slot.v,
+                                key_padding_mask=slot.key_padding_mask, profile=slot.profile)
+                spa_sum = term if spa_sum is None else spa_sum + term
+            return base if spa_sum is None else base + spa_sum
+        if ctx.k is None:
             return base  # wrapped-no-prompt == vanilla RFD3
         spa = self.spa(Q_L, ctx.k, ctx.v, key_padding_mask=ctx.key_padding_mask)
         return base + spa
@@ -91,6 +131,8 @@ class SPAAdapter(nn.Module):
 
     Use:
         ``set_prompt(prompt)`` once per design (before RFD3's forward) to project + stash K/V;
+        ``set_prompts([(prompt, profile), ...])`` for a multi-prompt (two-steer) design — one
+            steered region per prompt, gated by a disjoint profile (dev: two-steer driver);
         ``set_null_prompt(D)`` for CFG zero-prompt dropout (the learned null token e∅, dev ``11`` §6);
         ``clear_prompt()`` for the wrapped-no-prompt baseline (λ=0 / no prompt available);
         ``set_scale(λ)`` to tune prompt strength at inference;
@@ -118,6 +160,40 @@ class SPAAdapter(nn.Module):
             key_padding_mask = None
         k, v = self.prompt_kv(p)
         self._context.k, self._context.v, self._context.key_padding_mask = k, v, key_padding_mask
+        self._context.prompts = None  # single-prompt path clears any stale multi-prompt state
+
+    def set_prompts(
+        self,
+        prompts_and_profiles: list[tuple[torch.Tensor, torch.Tensor | None]],
+        key_padding_masks: list[torch.Tensor | None] | None = None,
+    ) -> None:
+        """Stash **several** prompts for a multi-prompt (two-steer) design (once per design).
+
+        Each ``(prompt, profile)`` is projected + turned into its own K/V exactly as
+        :meth:`set_prompt` does a single one; the wrapper then sums ``Σₖ SPA(A, Gₖ)·profileₖ``.
+        The ``profile`` masks must be **disjoint** (region U₁ vs U₂, with the pinned motif + free
+        region 0 in every mask) so each design residue gets at most one prompt's contribution —
+        mutual exclusivity by construction. A ``None`` profile means "steer every residue" (only
+        sensible for a single prompt). ``λ`` (:meth:`set_scale`) is global across all prompts.
+
+        Args:
+            prompts_and_profiles: list of ``(prompt [D, Nₖ, c_kv], profile [I] or None)``.
+            key_padding_masks: optional per-prompt ``[D, Nₖ]`` masks (default all ``None``).
+        """
+        slots: list[SPAPromptSlot] = []
+        for i, (prompt, profile) in enumerate(prompts_and_profiles):
+            p = self.projector(prompt)
+            kpm = None if key_padding_masks is None else key_padding_masks[i]
+            if kpm is not None and kpm.shape[-1] != p.shape[1]:
+                # a token-count-changing projector invalidates a per-residue prompt mask (see
+                # set_prompt); non-overlap masking is the identity-projector (variant-C) path anyway.
+                kpm = None
+            k, v = self.prompt_kv(p)
+            prof = None if profile is None else profile.detach().float()
+            slots.append(SPAPromptSlot(k=k, v=v, profile=prof, key_padding_mask=kpm))
+        # multi-prompt supersedes the single-prompt slot; clear it to avoid double-counting.
+        self._context.k = self._context.v = self._context.key_padding_mask = None
+        self._context.prompts = slots
 
     def set_null_prompt(self, batch: int) -> None:
         """Stash the learned null-token K/V on the context — CFG zero-prompt dropout (dev ``11`` §6).
@@ -130,12 +206,14 @@ class SPAAdapter(nn.Module):
         """
         k, v = self.prompt_kv.null_kv(batch)
         self._context.k, self._context.v, self._context.key_padding_mask = k, v, None
+        self._context.prompts = None  # null-prompt is single-slot; clear any multi-prompt state
 
     def clear_prompt(self) -> None:
         """Drop the prompt ⇒ wrappers return base only (the wrapped-no-prompt baseline: λ=0 / no
         prompt available). NOTE: CFG zero-prompt dropout uses :meth:`set_null_prompt` instead, so a
         gradient still flows to the adapter (dev ``11`` §6)."""
         self._context.k = self._context.v = self._context.key_padding_mask = None
+        self._context.prompts = None
 
     def set_scale(self, value: float) -> None:
         """Set the inference scale λ on every block (0 ⇒ unconditional == vanilla RFD3)."""
