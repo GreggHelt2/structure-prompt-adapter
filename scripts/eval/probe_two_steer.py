@@ -42,7 +42,7 @@ from pathlib import Path
 # Sibling helpers — same dir is sys.path[0] when either script is run directly.
 from probe_hard_soft_free import (
     DEFAULT_CKPT, DEFAULT_PDB_DIR, _ca, _contiguous, _mean, _pair_tm, _precompute_prompt,
-    _profile, _resolve_pdb, _rfd3_ckpt, _slice_tm, build_contig, build_partition,
+    _profile, _resolve_pdb, _rfd3_ckpt, _seg_len, _slice_tm, build_contig, build_partition,
 )
 
 # target token → (which precomputed prompt, human label). "free" is handled separately (no prompt).
@@ -63,6 +63,31 @@ def _parse_cells(spec):
     if ("free", "free") not in cells:
         cells.insert(0, ("free", "free"))         # the paired baseline is mandatory; run it first
     return cells
+
+
+def _spacered_partition(motif_seg, r1_len, r2_len, sp_inner, sp_term):
+    """Contig ``[Ns] R1 [s] M [s] R2 [Ns]`` with RFD3-FREE spacers (s=inner, Ns=terminal). Free residues
+    decouple each soft region from the pinned motif M (and, terminally, from the chain ends), giving R1/R2
+    geometric slack to adopt their folds without conforming to an immediately-adjacent foreign motif (dev:
+    spacer probe; motivated by the Fig-2 self-prompt vs two-steer tension, ``results/09``). Regions stay
+    contiguous single blocks; spacer residues get profile 0 (RFD3 designs them freely). Returns
+    ``(contig_str, M_idx, R1_idx, R2_idx, L)`` — the drop-in replacement for build_contig+build_partition
+    when either spacer > 0 (both 0 ⇒ caller uses the original path, so this is regression-inert)."""
+    segs = []
+    if sp_term:  segs.append(("_", sp_term))          # N-terminal spacer (before R1)
+    segs.append(("R1", r1_len))
+    if sp_inner: segs.append(("_", sp_inner))          # R1|M spacer
+    segs.append(("M", _seg_len(motif_seg)))
+    if sp_inner: segs.append(("_", sp_inner))          # M|R2 spacer
+    segs.append(("R2", r2_len))
+    if sp_term:  segs.append(("_", sp_term))          # C-terminal spacer (after R2)
+    toks, idx, cur = [], {"R1": [], "M": [], "R2": []}, 0
+    for role, ln in segs:
+        toks.append(str(motif_seg) if role == "M" else str(ln))
+        if role in idx:
+            idx[role] = list(range(cur, cur + ln))
+        cur += ln
+    return ",".join(toks), idx["M"], idx["R1"], idx["R2"], cur
 
 
 def _score_cell(outs, edir, cname, geom, src_struct, src_positions, g1_ca, g2_ca):
@@ -172,8 +197,13 @@ def run_two_steer(args):
     base_variant = {"name": "C", "projector": "identity", "resampler_tokens": None,
                     "strip_bos_eos": True, "use_clss": False}
 
-    # Fixed contig R1|M|R2 (only prompts/profiles vary per cell) ⇒ build the engine ONCE.
-    contig, order = build_contig(args.motif_seg, r1_len, r2_len, "BAC")     # B=R1, A=M, C=R2
+    # Fixed contig (only prompts/profiles vary per cell) ⇒ build the engine ONCE. Optional RFD3-free
+    # spacers decouple each soft region from the pinned motif / chain termini (dev: spacer probe).
+    sp_in, sp_tm = int(args.inner_spacer or 0), int(args.term_spacer or 0)
+    if sp_in or sp_tm:
+        contig, M_idx, R1_idx, R2_idx, L = _spacered_partition(args.motif_seg, r1_len, r2_len, sp_in, sp_tm)
+    else:
+        contig, order = build_contig(args.motif_seg, r1_len, r2_len, "BAC")  # B=R1, A=M, C=R2
     cfg = OmegaConf.create({
         "paths": {"rfd3_ckpt": _rfd3_ckpt(getattr(args, "rfd3_ckpt", None))},
         "hardware": {"device": device},
@@ -182,8 +212,13 @@ def run_two_steer(args):
                  "num_timesteps": args.num_timesteps, "seed": int(args.seed), "ckpt": args.ckpt,
                  "out_dir": str(out_dir), "motif": {"source_pdb": motif_pdb, "contig": contig}},
     })
-    motif_spec, M_idx, R1_idx, R2_idx, L, _cr = build_partition(
-        cfg, args.motif_seg, r1_len, r2_len, order)                          # U→R1, C→R2
+    if sp_in or sp_tm:
+        from spa.eval.generate import build_motif, _parse_contig_motif_indices
+        motif_spec, _ = build_motif(cfg)
+        assert sorted(_parse_contig_motif_indices(contig)) == M_idx, "spacer contig/M-idx mismatch"
+    else:
+        motif_spec, M_idx, R1_idx, R2_idx, L, _cr = build_partition(
+            cfg, args.motif_seg, r1_len, r2_len, order)                      # U→R1, C→R2
     m_lo, m_hi = _contiguous(M_idx); r1_lo, r1_hi = _contiguous(R1_idx); r2_lo, r2_hi = _contiguous(R2_idx)
     geom = (m_lo, m_hi, r1_lo, r1_hi, r2_lo, r2_hi, M_idx)
     print(f"[2steer] contig {contig!r}  L={L}   R1[{r1_lo}:{r1_hi}]  M[{m_lo}:{m_hi}]  R2[{r2_lo}:{r2_hi}]")
@@ -241,6 +276,7 @@ def _config(args, cells, lam, L):
     return {"motif_source": args.motif_source, "motif_seg": args.motif_seg,
             "g1": args.g1, "r1_len": int(args.r1_len), "g2": args.g2, "r2_len": int(args.r2_len),
             "lambda": lam, "K": int(args.num_designs), "seed": int(args.seed), "L": int(L),
+            "inner_spacer": int(args.inner_spacer or 0), "term_spacer": int(args.term_spacer or 0),
             "ckpt": args.ckpt, "cells": ["%s:%s" % c for c in cells]}
 
 
@@ -280,6 +316,8 @@ def main():
     ap.add_argument("--lambda", dest="lambda_scale", type=float, default=2.0, help="SPA strength λ (global, both regions)")
     ap.add_argument("--r1-lambda", type=float, default=None, help="per-region effective λ on R1 (overrides --lambda for R1; effective λ = λ·mask)")
     ap.add_argument("--r2-lambda", type=float, default=None, help="per-region effective λ on R2 (overrides --lambda for R2)")
+    ap.add_argument("--inner-spacer", type=int, default=0, help="free RFD3 residues inserted at R1|M and M|R2 (decouple soft regions from the pinned motif)")
+    ap.add_argument("--term-spacer", type=int, default=0, help="free RFD3 residues at N-term (before R1) and C-term (after R2)")
     ap.add_argument("--cells", default="free:free,g1:g2,g2:g1,g1:g1,g2:g2,g1:free,free:g2",
                     help="comma list of R1:R2 target pairs; each side ∈ {free,g1,g2}. free:free is forced first.")
     ap.add_argument("--num-designs", type=int, default=8, help="K designs (paired noise)")
