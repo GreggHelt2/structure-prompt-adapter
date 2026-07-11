@@ -21,17 +21,20 @@ MOTIF_ID="${MOTIF_ID:-A0A2X2KHU0}"
 PREP=/workspace/prep; OUT=/workspace/twosteer
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 
-# combos: "candidate seed arm contig"  (contig = R1_len,motif_seg,R2_len — the design's build_contig BAC string)
-COMBOS=(
-  "A0A843G012 17 g1_g2    54,A2-20,47"
-  "A0A843G012 17 free_free 54,A2-20,47"
-  "A0A843G012 0  g1_g2    54,A2-20,47"
-  "A0A843G012 0  free_free 54,A2-20,47"
-  "A0A3P5VTL4 17 g1_g2    88,A2-20,47"
-  "A0A3P5VTL4 17 free_free 88,A2-20,47"
-  "A0A3P5VTL4 0  g1_g2    88,A2-20,47"
-  "A0A3P5VTL4 0  free_free 88,A2-20,47"
-)
+# Which cell arms to score, over both candidates × both seeds. Default = the headliner + baseline;
+# override e.g. ARMS="g1_free free_g2" for the single-steer follow-up. contig = R1_len,motif_seg,R2_len
+# (the design's build_contig BAC string) — per-candidate, since R1_len differs.
+ARMS="${ARMS:-g1_g2 free_free}"
+declare -A CONTIG=( ["A0A843G012"]="54,A2-20,47" ["A0A3P5VTL4"]="88,A2-20,47" )
+COMBOS=()
+for cand in A0A843G012 A0A3P5VTL4; do
+  for seed in 17 0; do
+    for arm in $ARMS; do
+      COMBOS+=("$cand $seed $arm ${CONTIG[$cand]}")
+    done
+  done
+done
+log "ARMS=$ARMS  ->  ${#COMBOS[@]} cells"
 
 export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
 export PATH="/usr/local/nvidia/bin:${PATH}"; ldconfig 2>/dev/null || true

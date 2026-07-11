@@ -76,6 +76,8 @@ add_env BATCH_SIZES "${BATCH_SIZES:-}"
 # OF3 attention kernel: triton (default, Hopper perf, but its Evoformer kernel asserts bs=1 — evoformer.py:915)
 # vs nokernel (stock attention, the A5000-verified batched path). Set KERNEL=nokernel to batch bs>1. dev 23 §7.
 add_env KERNEL "${KERNEL:-}"
+# two-steer designability (run_twosteer_designability.sh): which cell arms to score
+add_env ARMS "${ARMS:-}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;
