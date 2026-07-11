@@ -25,16 +25,22 @@ log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 # override e.g. ARMS="g1_free free_g2" for the single-steer follow-up. contig = R1_len,motif_seg,R2_len
 # (the design's build_contig BAC string) — per-candidate, since R1_len differs.
 ARMS="${ARMS:-g1_g2 free_free}"
-declare -A CONTIG=( ["A0A843G012"]="54,A2-20,47" ["A0A3P5VTL4"]="88,A2-20,47" )
+# CANDIDATES: space-separated "<key>:<contig>" (contig = R1_len,motif_seg,R2_len, the BAC build_contig
+# string). <key> also names the staged input dir $PREP_URI/<key>_s<seed>/<arm>/. Default = the β:α
+# per-region-λ cell + the α-lean α/β cell (both R2=46, G2=A0A841ZMR1). SEEDS default = seed 17 only.
+# key = R1target x R2target [ _spacer ]; R2 is ALWAYS A0A841ZMR1 (α). All four are TWO-STEER (R1|M|R2).
+CANDIDATES="${CANDIDATES:-A0A843G012xA0A841ZMR1:54,A2-20,46 A0A7K0JMI5xA0A841ZMR1:54,A2-20,46 A0A7K0JMI5xA0A841ZMR1_i16:54,16,A2-20,16,46 A0A7K0JMI5xA0A841ZMR1_i8t8:8,54,8,A2-20,8,46,8}"
+SEEDS="${SEEDS:-17}"
 COMBOS=()
-for cand in A0A843G012 A0A3P5VTL4; do
-  for seed in 17 0; do
+for pair in $CANDIDATES; do
+  cand="${pair%%:*}"; contig="${pair#*:}"
+  for seed in $SEEDS; do
     for arm in $ARMS; do
-      COMBOS+=("$cand $seed $arm ${CONTIG[$cand]}")
+      COMBOS+=("$cand $seed $arm $contig")
     done
   done
 done
-log "ARMS=$ARMS  ->  ${#COMBOS[@]} cells"
+log "ARMS=$ARMS  CANDIDATES=[$CANDIDATES]  SEEDS=[$SEEDS]  ->  ${#COMBOS[@]} cells"
 
 export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
 export PATH="/usr/local/nvidia/bin:${PATH}"; ldconfig 2>/dev/null || true
