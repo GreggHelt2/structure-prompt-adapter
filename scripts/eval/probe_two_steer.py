@@ -273,9 +273,14 @@ def run_two_steer(args):
 
 
 def _config(args, cells, lam, L):
+    # record the EFFECTIVE per-region λ (not just the global λ_scale) — else the JSON reads λ=global
+    # default while the run actually used r1≠r2 (dev: this exact provenance gap was hit for r1_2.5_r2_1.5).
+    lr1 = float(args.r1_lambda) if args.r1_lambda is not None else lam
+    lr2 = float(args.r2_lambda) if args.r2_lambda is not None else lam
     return {"motif_source": args.motif_source, "motif_seg": args.motif_seg,
             "g1": args.g1, "r1_len": int(args.r1_len), "g2": args.g2, "r2_len": int(args.r2_len),
-            "lambda": lam, "K": int(args.num_designs), "seed": int(args.seed), "L": int(L),
+            "lambda": lam, "r1_lambda": lr1, "r2_lambda": lr2,
+            "K": int(args.num_designs), "seed": int(args.seed), "L": int(L),
             "inner_spacer": int(args.inner_spacer or 0), "term_spacer": int(args.term_spacer or 0),
             "ckpt": args.ckpt, "cells": ["%s:%s" % c for c in cells]}
 
