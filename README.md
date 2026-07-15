@@ -28,7 +28,7 @@ SPA's own trained adapter weights are already included in this repo, under `mode
 **Note:** ESM3 weights auto-download from Hugging Face on first use. Even though they're MIT-licensed
 and ungated, you still need a free Hugging Face account and a Read token (`huggingface-cli login`).
 
-Once installed:
+Example usage:
 
 ```bash
 conda activate spa
