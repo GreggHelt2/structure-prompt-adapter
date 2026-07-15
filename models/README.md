@@ -38,3 +38,37 @@ assume it's present in `models/` until this note is removed.
   for multi-region or localized/composable conditioning (steering only part of a structure). Also
   performs comparably to `spa-Nx1536-uncond` when the latter is given a masked prompt zero-shot, but
   this is the checkpoint actually used to generate the composability figures.
+
+## Why the file sizes differ (and why not in the order you'd expect)
+
+At a glance you'd expect file size to scale with the prompt's own dimensions — N×1536 biggest, then
+1×1536, then 1×32 smallest. It doesn't:
+
+| Model | Size |
+|---|---|
+| `spa-Nx1536-uncond.pt` | 90.15 MB |
+| `spa-Nx1536-motif.pt` | 90.15 MB |
+| `spa-Nx1536-multigran.pt` | 90.15 MB |
+| `spa-1x32-uncond.pt` | 91.12 MB |
+| `spa-1x1536-uncond.pt` *(not yet published)* | ~126 MB |
+
+That's because file size tracks the trainable **front-end projector's** parameter count
+(`src/spa/model/projectors.py`), not the runtime prompt's shape — and the three projectors are very
+different sizes:
+
+- **N×1536 — `IdentityProjector`.** Passes the per-residue ESM3 output straight through, **zero**
+  learned parameters. All ~90 MB is just the shared cross-attention adapter (~24M params), identical
+  across every N×1536 checkpoint regardless of what it was trained on.
+- **1×32 — `CLSSProjector`.** Fans a **32-dimensional** CLSS vector out to `n_tokens=4` prompt tokens
+  via `Linear(32, 4×1536)` — only ~203K trainable parameters (plus the small frozen CLSS
+  `structure_adapter`, ~49K params, also serialized into the file). A rounding error on top of the
+  shared adapter, which is why 1×32 (91.12 MB) is barely bigger than N×1536 (90.15 MB).
+- **1×1536 — `GlobalFanoutProjector`.** Fans a **1536-dimensional** mean-pooled ESM3 vector out to
+  `n_tokens=4` tokens via `Linear(1536, 4×1536)` — ≈9.44M trainable parameters (`1536 × 6144 + 6144`),
+  roughly 38 MB at fp32. That's on top of the same ~24M-param shared adapter every other variant has,
+  which is exactly the ~36 MB gap between it and the others.
+
+In short: 1×32's whole point is compressing the prompt down to a tiny 32-d bottleneck *before* fanning
+out, which is what keeps its projector cheap. 1×1536 skips that compression, so its fan-out layer pays
+for the full 1536-wide input — making it the *largest* file despite representing a coarser prompt than
+N×1536.

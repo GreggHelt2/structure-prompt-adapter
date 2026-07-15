@@ -1,7 +1,7 @@
 [![SPA ISMB 2026 poster](docs/poster/SPA_ISMB2026_poster_FINAL_thumbnail.png)](docs/poster/SPA_ISMB2026_poster_FINAL.pdf)
 
 The initial research in this repo was presented as a poster at the ISMB 2026 conference, July 12-16 in Washington DC.
-Source code will be made avaiable in this repo before the conference begins.
+Structure Prompt Adapter source code and trained models are both included in this repo.
 
 Poster Title: Structure Prompt Adapter (SPA): Flexible Structural Conditioning for RFdiffusion3
 
