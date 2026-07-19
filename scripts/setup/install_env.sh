@@ -28,8 +28,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEPS_DIR="$REPO_ROOT/deps"
-WEIGHTS_DIR="$REPO_ROOT/weights"
+
+# SPA_PROJECT_ROOT: the same portable, env-var-driven root that configs/paths/default.yaml uses
+# for rfd3_ckpt / proteinmpnn_repo / openfold3_ckpt (default: $HOME/projects/spa). Placing things
+# here — not inside this repo — means the Hydra configs find them with zero path overrides.
+SPA_PROJECT_ROOT="${SPA_PROJECT_ROOT:-$HOME/projects/spa}"
+DEPS_DIR="$SPA_PROJECT_ROOT/needed_repos"
+MODELS_ROOT="$SPA_PROJECT_ROOT/models"
+
+if [[ "$REPO_ROOT" != "$SPA_PROJECT_ROOT/structure-prompt-adapter" ]]; then
+  echo "Warning: this repo is at $REPO_ROOT, not \$SPA_PROJECT_ROOT/structure-prompt-adapter" >&2
+  echo "         ($SPA_PROJECT_ROOT/structure-prompt-adapter). Some Hydra config defaults" >&2
+  echo "         (e.g. openfold3_runner_yaml) assume that exact layout — either move this" >&2
+  echo "         checkout there, or set SPA_PROJECT_ROOT to this repo's actual parent directory." >&2
+fi
 
 # Pinned dependency commits — this is the exact combination validated to work together
 # (torch 2.5.1+cu124, no cuequivariance). Do not float these to "latest main".
@@ -87,12 +99,13 @@ echo "==> Installing SPA itself (editable)"
 conda run -n "$ENV_NAME" pip install -e "$REPO_ROOT"
 
 if [[ "$SKIP_CHECKPOINT" -eq 0 ]]; then
-  mkdir -p "$WEIGHTS_DIR"
-  if [[ -f "$WEIGHTS_DIR/rfd3_latest.ckpt" ]]; then
+  RFD3_CKPT_DIR="$MODELS_ROOT/rfdiffusion3"
+  mkdir -p "$RFD3_CKPT_DIR"
+  if [[ -f "$RFD3_CKPT_DIR/rfd3_latest.ckpt" ]]; then
     echo "==> RFdiffusion3 checkpoint already present, skipping download"
   else
     echo "==> Downloading RFdiffusion3 base checkpoint (multi-GB, may take a while)"
-    curl -fL "$RFD3_CKPT_URL" -o "$WEIGHTS_DIR/rfd3_latest.ckpt"
+    curl -fL "$RFD3_CKPT_URL" -o "$RFD3_CKPT_DIR/rfd3_latest.ckpt"
   fi
 fi
 
@@ -102,7 +115,10 @@ Done. Next steps:
   conda activate $ENV_NAME
 
 SPA adapter weights are already in models/ (part of this repo).
-RFdiffusion3 base checkpoint: $WEIGHTS_DIR/rfd3_latest.ckpt
+RFdiffusion3 base checkpoint: $MODELS_ROOT/rfdiffusion3/rfd3_latest.ckpt
+  (this matches configs/paths/default.yaml's default \$SPA_PROJECT_ROOT/models/rfdiffusion3/ —
+  no path override needed when running scripts/eval/generate.py etc., as long as SPA_PROJECT_ROOT
+  is unset or set the same way here and at run time)
 
 Note: ESM3 weights auto-download from Hugging Face on first use. Even though they're
 MIT-licensed / ungated, you still need a free Hugging Face account and a Read token:

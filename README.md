@@ -37,3 +37,42 @@ python scripts/eval/generate.py \
     eval.prompt_pdb=/path/to/prompt.pdb 'eval.conditions=[baseline,spa]' \
     'eval.lambda_scale=[0.5,1.0]' eval.num_designs=8 eval.length=100
 ```
+
+Both scripts place the dependency repos and downloaded weights under `$SPA_PROJECT_ROOT` (an env var,
+default `$HOME/projects/spa`) rather than inside this repo — this matches the layout the Hydra configs
+(`configs/paths/default.yaml`) already expect, so no path overrides are needed at run time. Set
+`SPA_PROJECT_ROOT` yourself if you'd rather use a different location (just set it consistently for both
+install and run time).
+
+---
+
+## Validation pipeline (ProteinMPNN → OpenFold3)
+
+To score designs — inverse-fold with ProteinMPNN and refold with OpenFold3 for self-consistency
+(scRMSD) designability — set up a second, separate environment:
+
+    bash scripts/setup/install_validation_env.sh
+
+This creates a `spa-verify-of3` conda environment with ProteinMPNN (cloned, no install needed — it
+runs as a script with bundled weights) and OpenFold3 (editable install + downloaded checkpoint). It's
+kept separate from the `spa` inference environment since OpenFold3's dependencies don't need to
+coexist with RFdiffusion3/ESM3, and OpenFold3 wants substantially more VRAM (**32GB+ recommended** —
+its own docs cite an A100 40GB as typical, well beyond what the inference tier needs).
+
+Run the full pipeline from the **inference** env — it shells out to `spa-verify-of3` automatically for
+both downstream steps, no manual environment switching required:
+
+```bash
+conda activate spa
+python scripts/eval/run_flywheel.py \
+    variant=C_n_by_1536 eval.ckpt=models/spa-Nx1536-uncond.pt \
+    eval.prompt_pdb=/path/to/prompt.pdb 'eval.conditions=[baseline,spa]' \
+    'eval.lambda_scale=[0.5,1.0]' eval.num_designs=8 eval.length=100 \
+    eval.proteinmpnn.conda_env=spa-verify-of3 \
+    +eval.flywheel.refolder._target_=spa.eval.openfold3.OF3Refolder \
+    +eval.flywheel.refolder.ckpt_path=${paths.openfold3_ckpt} \
+    +eval.flywheel.refolder.runner_yaml=${paths.openfold3_runner_yaml} \
+    +eval.flywheel.refolder.out_dir=${eval.out_dir}
+```
+
+Results (per-condition designability + adherence, aggregated) land in `<out_dir>/flywheel_results.json`.
