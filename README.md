@@ -208,10 +208,14 @@ python scripts/eval/run_flywheel.py \
     'eval.lambda_scale=[0.5,1.0]' eval.num_designs=8 eval.length=100 \
     eval.proteinmpnn.conda_env=spa-verify-of3 \
     +eval.flywheel.refolder._target_=spa.eval.openfold3.OF3Refolder \
-    +eval.flywheel.refolder.ckpt_path=${paths.openfold3_ckpt} \
-    +eval.flywheel.refolder.runner_yaml=${paths.openfold3_runner_yaml} \
-    +eval.flywheel.refolder.out_dir=${eval.out_dir}
+    '+eval.flywheel.refolder.ckpt_path=${paths.openfold3_ckpt}' \
+    '+eval.flywheel.refolder.runner_yaml=${paths.openfold3_runner_yaml}' \
+    '+eval.flywheel.refolder.out_dir=${eval.out_dir}'
 ```
+
+The last three arguments are **single-quoted on purpose**: `${paths...}` is a *Hydra* interpolation
+(resolved from `configs/paths/default.yaml`), not a shell variable — unquoted, bash rejects it with
+`bad substitution` before Hydra ever sees it.
 
 Results (per-condition designability + adherence, aggregated) land in `<out_dir>/flywheel_results.json`.
 Without the `refolder` overrides the flywheel runs adherence-only (no OpenFold3).
