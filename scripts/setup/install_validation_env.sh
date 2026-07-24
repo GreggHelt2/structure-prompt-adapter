@@ -92,9 +92,12 @@ if [[ "$SKIP_CHECKPOINT" -eq 0 ]]; then
 JSON
   conda run -n "$ENV_NAME" setup_openfold --config "$OF3_SETUP_CONFIG"
   rm -f "$OF3_SETUP_CONFIG"
-  echo "==> NOTE: verify the downloaded checkpoint filename matches paths.openfold3_ckpt's default"
-  echo "    (\$SPA_PROJECT_ROOT/models/openfold3/of3-p2-155k.pt) — not independently confirmed by"
-  echo "    this script; override paths.openfold3_ckpt=<actual path> if it differs."
+  # The "default" parameter set downloads as of3-p2-155k.pt into param_directory, which matches
+  # configs/paths/default.yaml's openfold3_ckpt ($SPA_PROJECT_ROOT/models/openfold3/of3-p2-155k.pt) —
+  # no path override needed. Confirmed against openfold3/entry_points/parameters.py
+  # (DEFAULT_CHECKPOINT_NAME=openfold3-p2-155k -> file_name of3-p2-155k.pt) and a live download
+  # (2026-07-24). Only override paths.openfold3_ckpt if you point selected_parameters at a different set.
+  echo "==> OpenFold3 checkpoint: $OF3_MODELS_DIR/of3-p2-155k.pt (matches paths.openfold3_ckpt default)"
 fi
 
 cat <<EOF
