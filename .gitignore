@@ -22,7 +22,13 @@ ENV/
 
 # ─── Hydra run outputs ────────────────────────────────────────────────────
 # Hydra writes per-run dirs (outputs/, multirun/) and a .hydra/ snapshot.
-outputs/
+# NOTE: `outputs/` (trailing slash) matches a directory but NOT a symlink named
+# `outputs`. As of 2026-07-23 `outputs` IS a symlink -> ../outputs/_compat (the
+# consolidated run archive lives outside both repos; dev docs/plan/30). Match both
+# forms so the symlink can never be committed — a bare `outputs` would otherwise
+# stage an absolute /home path into the public repo.
+/outputs
+/outputs/
 multirun/
 .hydra/
 
