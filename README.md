@@ -32,14 +32,14 @@ machinery (including hard, coordinate-pinned motif constraints) is left untouche
 
 All-atom diffusion models like RFdiffusion3 excel at de novo protein design. However, RFdiffusion3 enforces 3D
 structural conditioning by explicitly keeping specified atomic coordinates fixed within the iterative diffusion
-loop. While precise for motif scaffolding, this rigid geometric constraint can limit higher level topological
+loop. While precise for motif scaffolding, this rigid geometric constraint can limit higher-level topological
 flexibility. Here we introduce the Structure Prompt Adapter (SPA), a parameter-efficient method enabling
-additional, more flexible structural conditioning when coupled with RFDiffusion3. Inspired by the Image Prompt
+additional, more flexible structural conditioning when coupled with RFdiffusion3. Inspired by the Image Prompt
 Adapter (IP-Adapter) used in image diffusion workflows, SPA is a lightweight sidecar model that injects
 decoupled cross-attention into the RFdiffusion3 token track. It uses the Contrastive Learning Sequence-Structure
 (CLSS) encoder for encoding its additional structural prompts. This effectively guides coarser fold topology,
-while the native RFDiffusion3 cross-attention between atom level and token level tracks translates this guidance
-to the atom level track for positioning. Because RFdiffusion3 natively processes absolute Cartesian coordinates
+while the native RFdiffusion3 cross-attention between atom-level and token-level tracks translates this guidance
+to the atom-level track for positioning. Because RFdiffusion3 natively processes absolute Cartesian coordinates
 and CLSS encodes geometric topologies as invariant latent features, SPA can integrate these representations
 without computationally heavy geometric transformation layers. Trained on diverse 3D structures, SPA uses
 extensive data augmentation to learn spatial symmetries. We also train alternate versions of SPA that use only
@@ -93,13 +93,13 @@ use, SHA-256 checksums, and why the file sizes are *not* in the order you'd expe
   the designability cost is **fold-structured** — nearly free when steering *with* RFdiffusion3's helix-rich
   prior (α/β folds), bounded and `λ`-tunable when steering *against* it (all-β).
 - **Hard ⊕ soft, across 15 held-out folds.** The native motif is satisfied **100%** of the time (Cα motif-RMSD
-  ≈ 0.018 Å) — that pin is a *guarantee* of RFdiffusion3's revealed-coordinate freeze rather than a discovery;
-  the result is that the soft prompt **does not disturb it** while shifting the surrounding fold toward the
-  prompt on most folds (strongest on β), and the pinned motif **survives inverse-folding and refolding**
-  (median 0.66 Å). Notably, an adapter trained *only* on unconditional fold-steering composes with a hard
-  motif **zero-shot**, matching one trained with a motif curriculum. On the hardest (all-β) folds — against
-  RFdiffusion3's helix-rich prior — the soft prompt can even **improve** designability, since steering toward
-  the real β fold beats the unconditional attempt.
+  ≈ 0.018 Å): the pinned motif remains fixed in place because RFdiffusion3 freezes its coordinates throughout
+  the diffusion process. What SPA adds is that the soft prompt shifts the surrounding fold toward the prompt
+  on most folds (strongest on β) **without disturbing that pin** — and the pinned motif **survives
+  inverse-folding and refolding** (median 0.66 Å). Notably, an adapter trained *only* on unconditional
+  fold-steering composes with a hard motif **zero-shot**, matching one trained with a motif curriculum. On the
+  hardest (all-β) folds — against RFdiffusion3's helix-rich prior — the soft prompt can even **improve**
+  designability, since steering toward the real β fold beats the unconditional attempt.
 - **Prompt-specific.** Control experiments confirm the fold-steering *requires and follows* the actual
   structural prompt: a null (learned) prompt produces no steering, and a **mismatched** prompt steers the
   design toward the *wrong* fold — the effect is not a generic "the adapter always helps" artifact.
@@ -109,7 +109,9 @@ use, SHA-256 checksums, and why the file sizes are *not* in the order you'd expe
   multiple prompts can address different regions of one design — two regions steered toward two different
   folds, alongside a hard-pinned motif, without bleed between them. Localization is **partial and
   ratio-gated**: the frozen host drags the unsteered region along unless the steered region is a moderate
-  fraction (~⅓–½) of the design at gentle `λ`.
+  fraction (~⅓–½) of the design at gentle `λ`. *These are currently a Python API —
+  `SPAAdapter.set_profile` / `set_prompts`, as used by `scripts/eval/probe_hard_soft_free.py` and
+  `probe_two_steer.py` — not yet options on `generate.py`'s command line.*
 
 ---
 
