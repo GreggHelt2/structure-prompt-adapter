@@ -37,7 +37,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+
+# Run-artifact root — absolute + env-overridable, mirroring configs/paths/default.yaml's
+# `outputs_root: ${oc.env:SPA_OUTPUTS_ROOT,${paths.project_root}/outputs}`. A *relative* default
+# resolved against the invoking cwd and sent output into whichever repo the script was launched
+# from; a *shared* default made runs overwrite each other. See dev docs/plan/30 §6.
+_OUTPUTS_ROOT = Path(os.environ.get(
+    "SPA_OUTPUTS_ROOT",
+    Path(os.environ.get("SPA_PROJECT_ROOT", Path.home() / "projects" / "spa")) / "outputs"))
+
 
 # Sibling helpers — same dir is sys.path[0] when either script is run directly.
 from probe_hard_soft_free import (
@@ -330,7 +340,7 @@ def main():
     ap.add_argument("--num-timesteps", type=int, default=None, help="sampler steps (None → rfd3 edm.yaml 100)")
     ap.add_argument("--pdb-dir", default=DEFAULT_PDB_DIR)
     ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--out-dir", default="outputs/eval/twosteer")
+    ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "twosteer"))
     args = ap.parse_args()
 
     results, lam, out_dir = run_two_steer(args)

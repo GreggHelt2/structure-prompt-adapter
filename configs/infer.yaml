@@ -9,4 +9,5 @@ defaults:
 ckpt: null            # path to a trained SPA ModuleList checkpoint (null -> wrapped-no-prompt baseline)
 lambda_scale: 1.0     # SPA prompt strength at inference (0 -> unconditional == vanilla RFD3)
 num_designs: 8
-out_dir: ./outputs/infer
+out_dir: ${paths.outputs_root}/_incoming/infer   # absolute (dev plan/30 §6); was ./outputs/infer,
+                      # which resolved against the invoking cwd

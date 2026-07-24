@@ -34,7 +34,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+
+# Run-artifact root — absolute + env-overridable, mirroring configs/paths/default.yaml's
+# `outputs_root: ${oc.env:SPA_OUTPUTS_ROOT,${paths.project_root}/outputs}`. A *relative* default
+# resolved against the invoking cwd and sent output into whichever repo the script was launched
+# from; a *shared* default made runs overwrite each other. See dev docs/plan/30 §6.
+_OUTPUTS_ROOT = Path(os.environ.get(
+    "SPA_OUTPUTS_ROOT",
+    Path(os.environ.get("SPA_PROJECT_ROOT", Path.home() / "projects" / "spa")) / "outputs"))
+
 
 DEFAULT_PDB_DIR = ("/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/"
                    "atomistica_data_release/pdb")
@@ -184,7 +194,7 @@ def main() -> None:
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--num-timesteps", type=int, default=None, help="RFD3 sampler steps (None=200)")
     ap.add_argument("--of3", action="store_true", help="also score designability scRMSD (ProteinMPNN→OF3)")
-    ap.add_argument("--out-dir", default="outputs/eval/scaffold")
+    ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "scaffold"))
     args = ap.parse_args()
 
     prompts = [p.strip() for p in args.prompts.split(",") if p.strip()]

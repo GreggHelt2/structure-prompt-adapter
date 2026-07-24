@@ -26,3 +26,10 @@ openfold3_runner_yaml: ${paths.project_root}/structure-prompt-adapter/configs/of
 # Caches and outputs.
 esm3_cache_dir: ${paths.data_root}/processed/esm3_cache
 ckpt_dir: ${oc.env:SPA_CKPT_DIR,./checkpoints}
+# Run artifacts (designs, FASTAs, refolds, sweep JSON). ABSOLUTE and run-scoped on purpose: a
+# *relative* default resolves against the invoking cwd, which historically sent output into
+# whichever repo Claude Code was launched from ("cwd-spill"), and a *shared* default path made
+# every run write into one flat directory — so runs overwrote each other's files by name. Both
+# failure modes are documented in dev docs/plan/30. Keep new run dirs under _incoming/ and file
+# them into the archive's <family>/<YYYY-MM-DD>__<run-name>/ layout when a run is worth keeping.
+outputs_root: ${oc.env:SPA_OUTPUTS_ROOT,${paths.project_root}/outputs}

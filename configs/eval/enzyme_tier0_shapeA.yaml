@@ -30,7 +30,7 @@ lambda_scale: [0.0, 0.5, 1.0, 2.0]
 num_designs: 8
 seed: 0
 prompt_pdb: null                                # SET per-arm by the driver (compatible 1CEX / incompatible)
-out_dir: ./outputs/eval/enzyme_tier0_shapeA
+out_dir: ${paths.outputs_root}/_incoming/enzyme_tier0_shapeA   # absolute (dev plan/30 §6)
 
 # --- C: reproducible designability rates (dev 05 E9) --------------------------------------------------
 proteinmpnn:

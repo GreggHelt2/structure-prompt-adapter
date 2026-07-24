@@ -31,4 +31,4 @@ lambda_scale: [0.0, 0.5, 1.0, 2.0]              # λ sweep (0 = identity gate; 1
 num_designs: 8                                  # K backbones (over-generate for the designability screen)
 seed: 0
 prompt_pdb: null                                # SET per-arm by the driver (compatible 1CEX / incompatible all-β)
-out_dir: ./outputs/eval/enzyme_tier0
+out_dir: ${paths.outputs_root}/_incoming/enzyme_tier0   # absolute (dev plan/30 §6)

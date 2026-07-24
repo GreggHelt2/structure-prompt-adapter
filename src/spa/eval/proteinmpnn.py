@@ -279,7 +279,11 @@ def inverse_fold(cfg, *, designs=None) -> list[SequenceSet]:
     weights_dir = _weights_dir(cfg, pm)
     from .generate import _resolve_out_dir
 
-    out_dir = _resolve_out_dir(pm.get("out_dir") or "./outputs/eval/seqs")
+    # null out_dir -> eval.out_dir, mirroring design_dir in _resolve_design_paths: FASTAs land at
+    # <eval.out_dir>/seqs/<stem>.fa, inside the run's OWN dir. The former fallback was the SHARED
+    # "./outputs/eval/seqs", which every run wrote into; since FASTAs are named only {design_stem}.fa
+    # with no run id, runs silently overwrote each other and real data was lost (dev plan/30 §1.2).
+    out_dir = _resolve_out_dir(pm.get("out_dir") or cfg.eval.out_dir)
 
     if designs is not None:
         paths = [Path(str(getattr(d, "path", d))) for d in designs]

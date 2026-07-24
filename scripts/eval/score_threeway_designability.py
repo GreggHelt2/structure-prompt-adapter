@@ -15,7 +15,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+
+# Run-artifact root — absolute + env-overridable, mirroring configs/paths/default.yaml's
+# `outputs_root: ${oc.env:SPA_OUTPUTS_ROOT,${paths.project_root}/outputs}`. A *relative* default
+# resolved against the invoking cwd and sent output into whichever repo the script was launched
+# from; a *shared* default made runs overwrite each other. See dev docs/plan/30 §6.
+_OUTPUTS_ROOT = Path(os.environ.get(
+    "SPA_OUTPUTS_ROOT",
+    Path(os.environ.get("SPA_PROJECT_ROOT", Path.home() / "projects" / "spa")) / "outputs"))
+
 
 ROOT = Path("/home/user1/projects/spa")
 
@@ -43,7 +53,7 @@ def main():
                     help="OF3 refold batch_size. >1 forces the of3_nokernel.yml base + the of3_batch_patch.py "
                          "shim (the triton kernels CANNOT batch — evoformer.py:915); ~2.5x at bs=8, folds "
                          "equivalent (dev 23 §7.8). bs=1 = original per-fold behavior, unchanged.")
-    ap.add_argument("--out-dir", default=str(ROOT / "structure-prompt-adapter/outputs/eval/threeway_designability"))
+    ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "threeway_designability"))
     args = ap.parse_args()
 
     from omegaconf import OmegaConf

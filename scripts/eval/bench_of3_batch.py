@@ -15,6 +15,15 @@ import os
 import time
 from pathlib import Path
 
+# Run-artifact root — absolute + env-overridable, mirroring configs/paths/default.yaml's
+# `outputs_root: ${oc.env:SPA_OUTPUTS_ROOT,${paths.project_root}/outputs}`. A *relative* default
+# resolved against the invoking cwd and sent output into whichever repo the script was launched
+# from; a *shared* default made runs overwrite each other. See dev docs/plan/30 §6.
+_OUTPUTS_ROOT = Path(os.environ.get(
+    "SPA_OUTPUTS_ROOT",
+    Path(os.environ.get("SPA_PROJECT_ROOT", Path.home() / "projects" / "spa")) / "outputs"))
+
+
 ROOT = Path("/home/user1/projects/spa")
 
 
@@ -29,7 +38,7 @@ def main():
     ap.add_argument("--of3-conda-env", default="spa-verify-of3")
     ap.add_argument("--batch-patch-shim", default=None,
                     help="of3_batch_patch.py (applied only for bs>1; default $OF3_BATCH_SHIM or repo path)")
-    ap.add_argument("--out-dir", default=str(ROOT / "structure-prompt-adapter/outputs/eval/of3_batch_bench"))
+    ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "of3_batch_bench"))
     args = ap.parse_args()
 
     import biotite.structure as struc

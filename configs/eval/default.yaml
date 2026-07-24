@@ -27,7 +27,10 @@ prompt_id: null            # output-name group id (null -> prompt file stem, els
 # per dev 17 §5 (pooled variants drop a per-residue mask). Usually driven by scripts/eval/run_scaffold_eval.py.
 subregion: null            # e.g. {keep: [0,1,...,59]}  (0-based residue indices of S; attend to these rows only)
 
-out_dir: ./outputs/eval/generate   # relative -> resolved against the original cwd under Hydra
+out_dir: ${paths.outputs_root}/_incoming/generate   # ABSOLUTE + run-scoped (dev plan/30 §6).
+                                   # Was ./outputs/eval/generate — a *relative* path resolved against the
+                                   # invoking cwd, so output landed in whichever repo Hydra was launched
+                                   # from. Override per run: eval.out_dir=<abs path>.
 
 # SPA Stage-2 inverse-folding knobs (dev 05_validation_pipeline.md "Stage 2 — Inverse fold (ProteinMPNN)").
 # ProteinMPNN runs as a subprocess on its protein_mpnn_run.py (a script, not cleanly importable);
@@ -45,7 +48,14 @@ proteinmpnn:
   conda_env: null         # null -> current interpreter (spa-dev, per Task 1.5); else `conda run -n <env>`
   designs: null           # explicit list of design PDBs; null -> design_dir / eval.out_dir glob *.pdb
   design_dir: null        # dir of Stage-1 design PDBs; null -> eval.out_dir (the Stage-1 output dir)
-  out_dir: ./outputs/eval/seqs   # FASTAs land in <out_dir>/seqs/<design_stem>.fa (ProteinMPNN layout)
+  out_dir: null           # null -> eval.out_dir, so FASTAs land in <eval.out_dir>/seqs/<design_stem>.fa
+                          # — inside the run's OWN directory (mirrors design_dir's null -> eval.out_dir
+                          # idiom above). Was ./outputs/eval/seqs, a SHARED path every run wrote into:
+                          # ProteinMPNN's <out_dir>/seqs/ layout made that outputs/eval/seqs/seqs/, and
+                          # because FASTAs are named only {design_stem}.fa (no run id), runs silently
+                          # OVERWROTE each other — 7 dates of runs collapsed into one flat pile and only
+                          # the last write of any reused name survived. Real data was lost that way
+                          # (dev plan/30 §1.2 / results/12 §3). Do not point this at a shared path again.
 
 # SPA Stage-4 scoring knobs (dev 05_validation_pipeline.md §3 "Metrics" / 06_experiments.md §6).
 # Designability = best-of-K Cα scRMSD vs OF3 refolds; adherence = TM-score (+ Cα prompt-RMSD) vs the
