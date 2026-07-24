@@ -95,8 +95,12 @@ if [[ "$WITH_CLSS" -eq 1 ]]; then
   conda run -n "$ENV_NAME" pip install -e "$DEPS_DIR/CLSS"
 fi
 
-echo "==> Installing SPA itself (editable)"
-conda run -n "$ENV_NAME" pip install -e "$REPO_ROOT"
+echo "==> Installing SPA itself (editable, with the [eval] extra)"
+# The [eval] extra pulls tmtools (TMalign wrapper), which the validation flywheel's Stage-4 scoring
+# (src/spa/eval/score.py::tm_score) imports for TM-score adherence. run_flywheel.py is run FROM this
+# inference env (it only shells out to spa-verify-of3 for ProteinMPNN/OpenFold3), so tmtools must be
+# here. Plain `pip install -e .` (base deps only) leaves it out -> ModuleNotFoundError at scoring.
+conda run -n "$ENV_NAME" pip install -e "$REPO_ROOT[eval]"
 
 if [[ "$SKIP_CHECKPOINT" -eq 0 ]]; then
   RFD3_CKPT_DIR="$MODELS_ROOT/rfdiffusion3"

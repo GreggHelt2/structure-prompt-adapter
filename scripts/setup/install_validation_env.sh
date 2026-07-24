@@ -48,6 +48,14 @@ command -v conda >/dev/null 2>&1 || {
 echo "==> Creating conda env '$ENV_NAME' (python 3.12)"
 conda create -y -n "$ENV_NAME" -c conda-forge python=3.12
 
+# Pin torch to the validated 2.5.1+cu124 (triton 3.1.0) BEFORE the OpenFold3 editable install.
+# OpenFold3's pyproject declares an *unpinned* `torch`, so without this step pip resolves the latest
+# PyPI torch (2.13.0 + triton 3.7.1 as of this writing) — untested against this OpenFold3 pin and the
+# of3_batch_patch, and divergent from the inference env / README's stated stack. Installing torch first
+# satisfies OpenFold3's unpinned dep, so `pip install -e` below leaves it in place. Mirrors install_env.sh.
+echo "==> Installing torch 2.5.1+cu124"
+conda run -n "$ENV_NAME" pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+
 mkdir -p "$DEPS_DIR"
 
 clone_pinned () {
