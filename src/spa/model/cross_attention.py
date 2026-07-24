@@ -161,8 +161,9 @@ class SPACrossAttention(nn.Module):
                 to be ignored (PyTorch ``nn.MultiheadAttention`` convention).
             profile: optional per-call per-residue λ weight ``[I]`` in ``[0, 1]``. When given it
                 **overrides** the module's stored :attr:`lambda_profile` for this call — the
-                multi-prompt (two-steer) path passes a distinct disjoint region mask per prompt so
-                the one shared per-block module can serve every prompt (dev: two-steer driver).
+                multi-prompt (two-steer) path passes a distinct region mask per prompt so the one
+                shared per-block module can serve every prompt (disjoint by convention, not
+                enforced; overlapping masks make the terms add — dev ``31`` §3).
                 ``None`` -> fall back to :attr:`lambda_profile` (the single-prompt behavior).
 
         Returns:

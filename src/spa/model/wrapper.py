@@ -29,13 +29,15 @@ from torch import nn
 
 @dataclass
 class SPAPromptSlot:
-    """One prompt in a multi-prompt (two-steer) design: its projected K/V + a disjoint region mask.
+    """One prompt in a multi-prompt (two-steer) design: its projected K/V + its region mask.
 
     The single-prompt path uses :class:`SPAContext`'s ``k``/``v`` directly; the two-steer path
     instead stashes a *list* of these slots (``SPAContext.prompts``) and the wrapper loops-and-sums
-    ``Σₖ SPA(A, Gₖ)·profileₖ``. Because the ``profile`` masks are **disjoint** (region U₁ vs U₂,
-    with the pinned motif + free region 0 in every mask) each design residue receives at most one
-    prompt's contribution — mutual exclusivity by construction (dev: two-steer driver).
+    ``Σₖ SPA(A, Gₖ)·profileₖ``. Every experiment so far uses **disjoint** ``profile`` masks (region
+    U₁ vs U₂, with the pinned motif + free region 0 in every mask), so each design residue receives
+    exactly one prompt's contribution — but that is a **convention, not a constraint**: overlap is
+    permitted and is validated nowhere. See :meth:`SPAAdapter.set_prompts` for what overlap does
+    (dev ``31`` §3).
 
     Attributes:
         k: this prompt's keys ``[D, Mₖ, c_model]`` (Mₖ = |Gₖ| tokens; may differ across slots).
@@ -106,8 +108,10 @@ class SPAWrappedAttention(nn.Module):
         if ctx is None:
             return base  # wrapped-no-prompt == vanilla RFD3
         if ctx.prompts is not None:
-            # Multi-prompt (two-steer): sum each prompt's SPA term, gated by its disjoint region
-            # profile. λ (set_scale) is global; the profiles route each prompt to its own region.
+            # Multi-prompt (two-steer): sum each prompt's SPA term, gated by its region profile.
+            # λ (set_scale) is global; the profiles route each prompt to its own region. Profiles
+            # are disjoint by convention, not by enforcement — where they overlap the terms add
+            # (dev ``31`` §3; see set_prompts).
             spa_sum = None
             for slot in ctx.prompts:
                 term = self.spa(Q_L, slot.k, slot.v,
@@ -171,10 +175,21 @@ class SPAAdapter(nn.Module):
 
         Each ``(prompt, profile)`` is projected + turned into its own K/V exactly as
         :meth:`set_prompt` does a single one; the wrapper then sums ``Σₖ SPA(A, Gₖ)·profileₖ``.
-        The ``profile`` masks must be **disjoint** (region U₁ vs U₂, with the pinned motif + free
-        region 0 in every mask) so each design residue gets at most one prompt's contribution —
-        mutual exclusivity by construction. A ``None`` profile means "steer every residue" (only
-        sensible for a single prompt). ``λ`` (:meth:`set_scale`) is global across all prompts.
+        A ``None`` profile means "steer every residue" (only sensible for a single prompt).
+        ``λ`` (:meth:`set_scale`) is global across all prompts.
+
+        **Overlapping profiles are permitted and are NOT validated** (dev ``31`` §3). Every
+        experiment so far uses **disjoint** masks (region U₁ vs U₂, pinned motif + free region 0 in
+        every mask), so each residue gets exactly one prompt's contribution — a convention, not a
+        constraint. Where masks *do* overlap the terms simply **add**: each prompt runs its own
+        softmax, so the result is a vector **sum of independent steering directions**, not a blend
+        and not a competition. Two consequences:
+
+        - **Magnitude grows** — measured ~1.4× for two full-strength, near-orthogonal prompts (they
+          add in quadrature). That is an uncontrolled **over-steer**, the regime that costs
+          designability. Keep ``Σₖ profileₖ[i] ≤ 1`` unless over-steering deliberately.
+        - **The summed direction is not "a fold between G₁ and G₂".** Summation cannot express
+          blending at *any* profile setting; that needs per-query key routing (dev ``19``).
 
         Args:
             prompts_and_profiles: list of ``(prompt [D, Nₖ, c_kv], profile [I] or None)``.
