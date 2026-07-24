@@ -188,8 +188,16 @@ class SPAAdapter(nn.Module):
         - **Magnitude grows** — measured ~1.4× for two full-strength, near-orthogonal prompts (they
           add in quadrature). That is an uncontrolled **over-steer**, the regime that costs
           designability. Keep ``Σₖ profileₖ[i] ≤ 1`` unless over-steering deliberately.
-        - **The summed direction is not "a fold between G₁ and G₂".** Summation cannot express
-          blending at *any* profile setting; that needs per-query key routing (dev ``19``).
+        - **The summed direction is not "a fold between G₁ and G₂".** Summing two independently
+          attended terms mixes them with *operator-specified* weights (the profiles you pass); it
+          cannot let attention decide, per residue and content-wise, which prompt is relevant.
+          Content-adaptive mixing would need a single softmax over concatenated prompts — per-query
+          key routing (dev ``19`` §3.1) — which is **not** built.
+
+        Note this is only about *blending at one residue*. Region **composition** — different
+        prompts steering different regions of one design — is exactly what this method does, and is
+        demonstrated: two regions steered to two different β folds around a hard-pinned motif, in
+        one design, bleed-free and designable (dev ``results/11``).
 
         Args:
             prompts_and_profiles: list of ``(prompt [D, Nₖ, c_kv], profile [I] or None)``.
