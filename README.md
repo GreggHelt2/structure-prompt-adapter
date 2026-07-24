@@ -180,6 +180,22 @@ python scripts/eval/generate.py \
 `spa-Nx1536-uncond` composes with a hard motif zero-shot; `models/spa-Nx1536-motif.pt` is the checkpoint
 trained explicitly on the motif curriculum, and performs about the same.
 
+**Where output goes.** Each run writes to an **absolute, run-scoped** directory (*not* the current
+working directory), so runs never collide and it doesn't matter which folder you launch from. The default
+is `$SPA_PROJECT_ROOT/outputs/_incoming/<run-name>/`, using the same `$SPA_PROJECT_ROOT` from
+[Installation](#installation) (default `$HOME/projects/spa`), so output sits beside your weights and data
+rather than inside this repo. Inside a run directory you'll find the RFdiffusion3 backbones (`.pdb`), and
+for the full pipeline below also `seqs/` (ProteinMPNN FASTAs), the OpenFold3 refolds, and
+`flywheel_results.json`. To redirect:
+
+```bash
+export SPA_OUTPUTS_ROOT=/data/spa_runs      # move the whole output tree (persists across runs), or
+python scripts/eval/generate.py … eval.out_dir=/data/spa_runs/my_experiment   # one run only
+```
+
+The default location is set in `configs/paths/default.yaml` (`outputs_root`) and
+`configs/eval/default.yaml` (`out_dir`); both are ordinary Hydra values you can override per run.
+
 ---
 
 ## Validation pipeline (ProteinMPNN → OpenFold3)
