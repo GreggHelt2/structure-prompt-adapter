@@ -116,52 +116,55 @@ def build_eval_engine(cfg):
             dump_trajectories=bool(ev.get("dump_trajectory", False)),
         )
     )
-    engine.initialize()
-    _assert_sampler_effective(engine, sampler)
+    # initialize() RETURNS the merged config (checkpoint train_cfg + our overrides), which is the
+    # very object used to construct the model. Verifying against it tests _assign_override directly.
+    merged_cfg = engine.initialize()
+    _assert_sampler_effective(merged_cfg, sampler)
     return engine
 
 
-def _assert_sampler_effective(engine, requested: dict):
-    """Verify the requested sampler overrides ACTUALLY reached the initialized sampler.
+def _assert_sampler_effective(merged_cfg, requested: dict):
+    """Verify the requested sampler overrides ACTUALLY landed in the config the model was built from.
 
-    A config knob that silently fails to apply is the worst outcome for a calibration run: the job
-    reports "200 steps, gamma_0 0.6" and generates at 100 / 0.8 anyway, and nothing downstream can
-    tell. That is not hypothetical here, it is the exact shape of the bug this function exists to
-    catch (an empty override dict leaving the checkpoint's values standing, undetected for the whole
-    project). So we read the values back off the live sampler rather than trusting the request.
+    A knob that silently fails to apply is the worst outcome for a calibration run: the job reports
+    "200 steps, gamma_0 0.6" and generates at the checkpoint's 100 / 0.8 anyway, with nothing
+    downstream able to tell. That is not hypothetical, it is the exact bug that went undetected for
+    this whole project (an empty override dict leaving the checkpoint's values standing).
 
-    Always logs the EFFECTIVE settings, so every run records what it actually used even when nothing
-    was overridden. Raises only when a requested value did not take effect.
+    ``BaseInferenceEngine.initialize()`` returns the merged config, built by applying
+    ``inference_sampler_overrides`` as ``model.net.inference_sampler.{key}`` onto
+    ``checkpoint["train_cfg"]``, and that config is what constructs the model. So we read the values
+    back off it. An earlier version walked live module attributes and could not find the sampler at
+    all, which is why this reads config instead.
+
+    Prints unconditionally on stdout AND stderr: container log levels swallowed ``logging.info``,
+    making an earlier version of this check silently invisible. Raises only on a real mismatch.
     """
-    import logging
     import sys
 
     def _say(msg):
-        # print(), not logging: Hydra/container log levels swallowed logging.info in the M6 smoke
-        # job, which made the verification silently invisible. This line is provenance for every
-        # run and must survive any logger configuration.
         print(msg, file=sys.stderr, flush=True)
         print(msg, flush=True)
 
-    sampler_obj = None
-    for path in (("model", "net", "inference_sampler"), ("net", "inference_sampler"),
-                 ("inference_sampler",)):
-        obj = engine
-        for attr in path:
-            obj = getattr(obj, attr, None)
-            if obj is None:
-                break
-        if obj is not None:
-            sampler_obj = obj
-            break
+    keys = ("num_timesteps", "gamma_0", "step_scale")
+    effective = {}
+    try:
+        from omegaconf import OmegaConf
+        for k in keys:
+            effective[k] = OmegaConf.select(merged_cfg, f"model.net.inference_sampler.{k}")
+    except Exception:
+        node = merged_cfg
+        for attr in ("model", "net", "inference_sampler"):
+            node = getattr(node, attr, None) if node is not None else None
+        for k in keys:
+            effective[k] = getattr(node, k, None) if node is not None else None
 
-    if sampler_obj is None:
-        _say("[sampler] WARNING: could not locate the live inference_sampler to verify overrides; "
+    if all(v is None for v in effective.values()):
+        _say("[sampler] WARNING: could not read model.net.inference_sampler from the merged config; "
              f"requested={requested or '{} (checkpoint defaults)'}. "
              "If this run is a calibration, VERIFY MANUALLY before trusting it.")
         return
 
-    effective = {k: getattr(sampler_obj, k, None) for k in ("num_timesteps", "gamma_0", "step_scale")}
     _say(f"[sampler] EFFECTIVE: {effective}  (requested overrides: "
          f"{requested or '{} -> checkpoint defaults'})")
 
@@ -174,9 +177,8 @@ def _assert_sampler_effective(engine, requested: dict):
         raise RuntimeError(
             "Sampler override(s) did not take effect: "
             + ", ".join(f"{k}: requested {req}, effective {eff}" for k, (req, eff) in mismatched.items())
-            + ". The engine merges checkpoint train_cfg with inference_sampler_overrides; an override "
-              "that does not land means generation ran at the CHECKPOINT's settings. Refusing to "
-              "continue, since a calibration run at the wrong sampler settings is worse than none."
+            + ". Generation would have run at the CHECKPOINT's settings. Refusing to continue, since "
+              "a calibration run at the wrong sampler settings is worse than none."
         )
 
 
