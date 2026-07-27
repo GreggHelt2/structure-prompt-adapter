@@ -69,6 +69,13 @@ add_env KERNEL "${KERNEL:-}"
 add_env BATCH_SIZES "${BATCH_SIZES:-}"
 add_env DESIGN_ID "${DESIGN_ID:-}"
 add_env N_SEQS "${N_SEQS:-}"
+# run_m6_calibration.sh knobs (review M6). ARM selects the sampler arm: rfd3 (200/0.6) vs ours (100/0.8).
+add_env ARM "${ARM:-}"
+add_env K "${K:-}"
+add_env NSEQ "${NSEQ:-}"
+add_env SEED "${SEED:-}"
+add_env SCRMSD_ATOMS "${SCRMSD_ATOMS:-}"
+add_env SCRMSD_CUTOFF "${SCRMSD_CUTOFF:-}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;
