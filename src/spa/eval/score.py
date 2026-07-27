@@ -50,6 +50,10 @@ from typing import Any, Protocol, runtime_checkable
 
 DEFAULTS = {
     "scrmsd_cutoff": 2.0,       # Å — best-of-K Cα scRMSD designability threshold (dev 05 §3 / 06 §6)
+    # Atom set for scRMSD. "CA" (default) = this project's historical criterion, paired with the 2.0 Å
+    # cutoff above. "N,CA,C" = RFdiffusion3's own criterion, which they pair with 1.5 Å. Set BOTH knobs
+    # together when calibrating against their published rates; changing one alone is not comparable.
+    "scrmsd_atoms": "CA",
     "plddt_cutoff": 80.0,       # OF3 pLDDT designability gate (applied only when a pLDDT is supplied)
     "tm_norm": "prompt",        # primary TM normalization for adherence: prompt | design | max
     "diversity": True,          # compute pairwise-TM diversity among the designable set
@@ -63,6 +67,7 @@ class ScoreConfig:
     """Resolved ``eval.score`` knobs (defaults from :data:`DEFAULTS`)."""
 
     scrmsd_cutoff: float = DEFAULTS["scrmsd_cutoff"]
+    scrmsd_atoms: str = DEFAULTS["scrmsd_atoms"]
     plddt_cutoff: float = DEFAULTS["plddt_cutoff"]
     tm_norm: str = DEFAULTS["tm_norm"]
     diversity: bool = DEFAULTS["diversity"]
@@ -84,6 +89,7 @@ def score_config(cfg=None) -> ScoreConfig:
         sc = {}
     return ScoreConfig(
         scrmsd_cutoff=float(sc.get("scrmsd_cutoff", DEFAULTS["scrmsd_cutoff"])),
+        scrmsd_atoms=str(sc.get("scrmsd_atoms", DEFAULTS["scrmsd_atoms"])),
         plddt_cutoff=float(sc.get("plddt_cutoff", DEFAULTS["plddt_cutoff"])),
         tm_norm=str(sc.get("tm_norm", DEFAULTS["tm_norm"])),
         diversity=bool(sc.get("diversity", DEFAULTS["diversity"])),
@@ -253,6 +259,53 @@ def _ca_array(struct):
     """The one-Cα-per-residue ``AtomArray`` (``arr[arr.atom_name == 'CA']``; dev task spec)."""
     arr = _as_struct(struct)
     return arr[arr.atom_name == "CA"]
+
+
+def _backbone_array(struct):
+    """The N, CA, C backbone ``AtomArray``, ordered canonically within each residue.
+
+    RFdiffusion3 scores designability over **N, CA, C at <= 1.5 A**, whereas this project's default is
+    **CA only at < 2.0 A** (a looser criterion on a smaller atom set). Comparing our absolute rates to
+    RFD3's published numbers requires scoring on their atom set, which is what this provides.
+
+    Residues missing any of the three are dropped WHOLE (all-or-nothing), so the design and refold keep
+    a 1:1 atom correspondence; a partial residue would silently misalign the Kabsch pairing.
+    """
+    import numpy as np
+
+    arr = _as_struct(struct)
+    keep = np.isin(arr.atom_name, ("N", "CA", "C"))
+    bb = arr[keep]
+    order = {"N": 0, "CA": 1, "C": 2}
+    out_idx: list[int] = []
+    # group by (chain, res_id, insertion code) so residues stay contiguous and correctly ordered
+    seen: dict = {}
+    for i in range(len(bb)):
+        key = (str(bb.chain_id[i]), int(bb.res_id[i]),
+               str(bb.ins_code[i]) if hasattr(bb, "ins_code") else "")
+        seen.setdefault(key, {})[str(bb.atom_name[i])] = i
+    for key in sorted(seen, key=lambda k: (k[0], k[1], k[2])):
+        atoms = seen[key]
+        if len(atoms) != 3:      # incomplete backbone -> drop the whole residue
+            continue
+        out_idx.extend(atoms[a] for a in sorted(atoms, key=lambda a: order[a]))
+    return bb[out_idx]
+
+
+def backbone_rmsd(fixed_struct, mobile_struct) -> float:
+    """N/CA/C Kabsch-superposed RMSD (A), RFdiffusion3's designability atom set.
+
+    Same contract as :func:`ca_rmsd` but over three backbone atoms per residue instead of one.
+    """
+    import biotite.structure as struc
+
+    f = _backbone_array(fixed_struct)
+    m = _backbone_array(mobile_struct)
+    if len(f) != len(m):
+        raise ValueError(
+            f"backbone_rmsd: atom-count mismatch ({len(f)} vs {len(m)}) -- no 1:1 correspondence")
+    fitted, _ = struc.superimpose(f, m)
+    return float(struc.rmsd(f, fitted))
 
 
 def _seq_of(ca) -> str:
@@ -474,22 +527,29 @@ class Refolder(Protocol):
     def refold(self, sequence_set) -> list: ...
 
 
-def self_consistency(design_struct, refolds) -> SelfConsistency:
-    """Best-of-K Cα scRMSD between a design backbone and its K OF3 refolds (dev ``05`` §3).
+def self_consistency(design_struct, refolds, *, atoms: str = "CA") -> SelfConsistency:
+    """Best-of-K scRMSD between a design backbone and its K OF3 refolds (dev ``05`` §3).
+
+    ``atoms`` selects the atom set: ``"CA"`` (default, this project's historical criterion, normally
+    paired with a 2.0 Å cutoff) or ``"N,CA,C"`` (RFdiffusion3's own, paired with 1.5 Å). The default
+    keeps every previously computed number bit-identical.
 
     ``refolds`` is any iterable of refold structures (``AtomArray`` / path / Design). A refold whose
     Cα count differs from the design's contributes ``nan`` (skipped from the best-of). The minimum
     over the valid refolds is the design's scRMSD.
     """
-    d = _ca_array(design_struct)
+    use_bb = str(atoms).upper().replace(" ", "") in ("N,CA,C", "BACKBONE", "BB")
+    _arr = _backbone_array if use_bb else _ca_array
+    _rmsd = backbone_rmsd if use_bb else ca_rmsd
+    d = _arr(design_struct)
     per: list[float] = []
     for rf in refolds:
         try:
-            r = _ca_array(rf)
+            r = _arr(rf)
             if len(r) != len(d):
                 per.append(float("nan"))
                 continue
-            per.append(ca_rmsd(d, r))
+            per.append(_rmsd(d, r))
         except Exception:
             per.append(float("nan"))
     valid = [(i, v) for i, v in enumerate(per) if v == v]  # drop NaN
@@ -557,7 +617,7 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, c
         ds.prompt_rmsd = adh.prompt_rmsd
 
     if refolds is not None:
-        res = self_consistency(design, refolds)
+        res = self_consistency(design, refolds, atoms=sc.scrmsd_atoms)
         ds.scrmsd = res.scrmsd
         ds.best_refold_idx = res.best_refold_idx
         ds.plddt = plddt

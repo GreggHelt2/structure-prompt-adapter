@@ -72,8 +72,20 @@ def build_eval_engine(cfg):
     """Build + initialize the RFD3 inference engine for generation (loads frozen host weights).
 
     Mirrors ``harness.build_engine`` but reads the ``eval`` group: ``num_designs`` becomes the
-    diffusion batch (== K designs/run), ``length``/``specification`` set the design spec, and
-    ``num_timesteps`` (if given) overrides the sampler's 100-step default (rfd3 ``edm.yaml``) — the run-time cost knob.
+    diffusion batch (== K designs/run), ``length``/``specification`` set the design spec.
+
+    **Sampler overrides (``num_timesteps``, ``gamma_0``, ``step_scale``).** Anything left unset here is
+    inherited from the *released checkpoint's* ``train_cfg.model.net.inference_sampler``, because
+    ``BaseInferenceEngine`` starts from ``checkpoint["train_cfg"]`` and then applies
+    ``inference_sampler_overrides`` as ``model.net.inference_sampler.{key}``. An EMPTY dict therefore
+    leaves the checkpoint's values standing, which is how this project silently ran at the checkpoint's
+    **100 steps and gamma_0 = 0.8** rather than the **200 / 0.6** used throughout the RFdiffusion3 paper
+    (and applied by the shipped ``rfd3`` CLI). Only ``num_timesteps`` used to be exposed, so the other
+    two deviations were not merely undocumented, they were *unreachable* from our config surface.
+
+    Exposing ``gamma_0`` and ``step_scale`` is what makes the pipeline-calibration experiment possible:
+    generating at RFD3's own settings is a prerequisite for comparing our designable rates to theirs.
+    Defaults are unchanged: omit them and behaviour is byte-identical to before.
     """
     from rfd3.engine import RFD3InferenceConfig, RFD3InferenceEngine
 
@@ -84,6 +96,12 @@ def build_eval_engine(cfg):
     sampler: dict = {}
     if ev.get("num_timesteps") is not None:
         sampler["num_timesteps"] = int(ev.num_timesteps)
+    # gamma_0 = noise level, step_scale = eta. RFD3 paper (Fig. S3f): eta 1.5, gamma_0 0.6, 200 steps
+    # "used throughout this work unless otherwise specified". Checkpoint ships 100 / 0.8.
+    if ev.get("gamma_0") is not None:
+        sampler["gamma_0"] = float(ev.gamma_0)
+    if ev.get("step_scale") is not None:
+        sampler["step_scale"] = float(ev.step_scale)
 
     engine = RFD3InferenceEngine(
         **RFD3InferenceConfig(
@@ -99,7 +117,60 @@ def build_eval_engine(cfg):
         )
     )
     engine.initialize()
+    _assert_sampler_effective(engine, sampler)
     return engine
+
+
+def _assert_sampler_effective(engine, requested: dict):
+    """Verify the requested sampler overrides ACTUALLY reached the initialized sampler.
+
+    A config knob that silently fails to apply is the worst outcome for a calibration run: the job
+    reports "200 steps, gamma_0 0.6" and generates at 100 / 0.8 anyway, and nothing downstream can
+    tell. That is not hypothetical here, it is the exact shape of the bug this function exists to
+    catch (an empty override dict leaving the checkpoint's values standing, undetected for the whole
+    project). So we read the values back off the live sampler rather than trusting the request.
+
+    Always logs the EFFECTIVE settings, so every run records what it actually used even when nothing
+    was overridden. Raises only when a requested value did not take effect.
+    """
+    import logging
+
+    sampler_obj = None
+    for path in (("model", "net", "inference_sampler"), ("net", "inference_sampler"),
+                 ("inference_sampler",)):
+        obj = engine
+        for attr in path:
+            obj = getattr(obj, attr, None)
+            if obj is None:
+                break
+        if obj is not None:
+            sampler_obj = obj
+            break
+
+    if sampler_obj is None:
+        logging.warning(
+            "[sampler] could not locate the live inference_sampler to verify overrides; "
+            "requested=%s. If this run is a calibration, VERIFY MANUALLY before trusting it.",
+            requested or "{} (checkpoint defaults)")
+        return
+
+    effective = {k: getattr(sampler_obj, k, None) for k in ("num_timesteps", "gamma_0", "step_scale")}
+    logging.info("[sampler] effective: %s (requested overrides: %s)",
+                 effective, requested or "{} -> checkpoint defaults")
+
+    mismatched = {
+        k: (v, effective.get(k))
+        for k, v in requested.items()
+        if effective.get(k) is not None and float(effective[k]) != float(v)
+    }
+    if mismatched:
+        raise RuntimeError(
+            "Sampler override(s) did not take effect: "
+            + ", ".join(f"{k}: requested {req}, effective {eff}" for k, (req, eff) in mismatched.items())
+            + ". The engine merges checkpoint train_cfg with inference_sampler_overrides; an override "
+              "that does not land means generation ran at the CHECKPOINT's settings. Refusing to "
+              "continue, since a calibration run at the wrong sampler settings is worse than none."
+        )
 
 
 def load_adapter(net, cfg, device):
