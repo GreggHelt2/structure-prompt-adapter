@@ -292,8 +292,36 @@ def _mean(rows, key, cond=None):
     return (sum(vals) / len(vals)) if vals else None
 
 
+# Smallest F_ceiling that counts as a real ceiling for the localization index.
+#
+# loc_index = 1 - F_drag/F_ceiling normalizes the free region's drift by how far it drifts under
+# GLOBAL steering. That only means something when global steering actually moves F. On a fold the
+# adapter cannot steer, F_ceiling is noise around zero, and dividing by it returns unbounded values
+# that look like excellent localization (>1) while measuring nothing. Guarding only against an
+# exactly-zero denominator, as this did before 2026-07-27, does not catch that.
+#
+# Two rules, the first principled and the second empirical:
+#   * A NEGATIVE ceiling is meaningless by construction. It says global steering pushed F further
+#     from the target, i.e. there is no steering signal at all to normalize against.
+#   * A POSITIVE ceiling below this floor is within measurement noise. For scale, the cross-run
+#     reproducibility of a mean TM measured on this pipeline is ~0.004 (docs/results/02 §5 addendum),
+#     so 0.05 is roughly an order of magnitude above the noise, while every well-conditioned cell in
+#     the 2026-07-02 ratio sweep sat at 0.09 or above. The pathological ones sat at -0.036 to -0.003.
+#
+# When the ceiling fails these, loc_index is reported as None (undefined) rather than a number.
+# Every consumer here already filters None and prints "n/a", and callers must NOT average over
+# undefined cells: doing so is exactly what produced the retracted "⅓–½ sweet spot" (docs/results/02
+# §7 verdict 2026-07-27).
+F_CEILING_MIN = 0.05
+
+
 def _summarize(ex, rows, lambdas):
-    """Per example: free anchors + per-λ S-steer / F-drag / F-disp / loc-index."""
+    """Per example: free anchors + per-λ S-steer / F-drag / F-disp / loc-index.
+
+    ``loc_index`` is None when ``F_ceiling`` is not a usable denominator; see ``F_CEILING_MIN``.
+    ``loc_index_undefined`` carries the reason so a later reader can tell "no data" from "the
+    adapter cannot steer this fold" without re-deriving it.
+    """
     free_S = _mean(rows, "tm_S", "free"); free_F = _mean(rows, "tm_F", "free")
     out = {"name": ex["name"], "L": ex["L"], "b": ex["b"], "G": ex["G"], "ratio": ex.get("ratio"),
            "free_S->G": free_S, "free_F->G": free_F, "lambdas": {}}
@@ -305,11 +333,19 @@ def _summarize(ex, rows, lambdas):
         s_steer = (locS - free_S) if (locS is not None and free_S is not None) else None
         f_drag = (locF - free_F) if (locF is not None and free_F is not None) else None
         f_ceil = (gloF - free_F) if (gloF is not None and free_F is not None) else None
-        loc_idx = (1.0 - f_drag / f_ceil) if (f_drag is not None and f_ceil not in (None, 0)) else None
+        # See F_CEILING_MIN: an unusable ceiling makes the index undefined, not merely imprecise.
+        if f_drag is None or f_ceil is None:
+            loc_idx, undefined = None, "missing F_drag or F_ceiling"
+        elif f_ceil < 0:
+            loc_idx, undefined = None, f"F_ceiling {f_ceil:+.4f} is negative: global steering moved F away"
+        elif f_ceil < F_CEILING_MIN:
+            loc_idx, undefined = None, f"F_ceiling {f_ceil:+.4f} < {F_CEILING_MIN}: within noise, no usable ceiling"
+        else:
+            loc_idx, undefined = 1.0 - f_drag / f_ceil, None
         out["lambdas"][f"{lam:g}"] = {
             "loc_S->G": locS, "loc_F->G": locF, "glob_S->G": gloS, "glob_F->G": gloF,
             "S_steer": s_steer, "F_drag": f_drag, "F_ceiling": f_ceil, "F_disp": disp,
-            "loc_index": loc_idx,
+            "loc_index": loc_idx, "loc_index_undefined": undefined,
         }
     return out
 
@@ -347,7 +383,11 @@ def _print_ratio_trend(summ, lambdas):
     print(f"\n{'='*80}\nRATIO-ISOLATION TREND — does localization improve as S shrinks? (arbitrary split)\n{'='*80}")
     for lam in lambdas:
         print(f"\n  λ={lam:g}   (want: drag/steer ↓ and loc-idx ↑ as S/L ↓)")
-        hdr = f"  {'S/L':>6}{'n':>4}{'S-steer':>9}{'F-drag':>9}{'drag/steer':>11}{'loc-idx':>9}"
+        # loc-n is deliberately its own column: it is the number of cells the loc-idx mean is
+        # actually over, which is NOT n whenever a fold has an unusable ceiling. Reporting the mean
+        # without it is how the retracted sweet spot survived (docs/results/02 §7 verdict).
+        hdr = (f"  {'S/L':>6}{'n':>4}{'S-steer':>9}{'F-drag':>9}{'drag/steer':>11}"
+               f"{'loc-idx':>9}{'loc-n':>7}")
         print(hdr); print("  " + "-" * (len(hdr) - 2))
         for r in ratios:
             ds = [s["lambdas"][f"{lam:g}"] for s in summ if s.get("ratio") == r]
@@ -358,7 +398,17 @@ def _print_ratio_trend(summ, lambdas):
             mf = (sum(fd) / len(fd)) if fd else None
             ratio_ds = (mf / ms) if (ms and mf is not None and ms != 0) else None
             ml = (sum(li) / len(li)) if li else None
-            print(f"  {r:>6.2f}{len(ds):>4}{f(ms):>9}{f(mf):>9}{g(ratio_ds):>11}{g(ml):>9}")
+            loc_n = f"{len(li)}/{len(ds)}" + ("" if len(li) == len(ds) else " !")
+            print(f"  {r:>6.2f}{len(ds):>4}{f(ms):>9}{f(mf):>9}{g(ratio_ds):>11}{g(ml):>9}{loc_n:>7}")
+        # Name the excluded cells rather than leaving a bare count, so the reason is one glance away.
+        dropped = [(s["name"], s["lambdas"][f"{lam:g}"]["loc_index_undefined"])
+                   for s in summ
+                   if s.get("ratio") is not None
+                   and s["lambdas"][f"{lam:g}"].get("loc_index_undefined")]
+        if dropped:
+            print(f"\n  loc-idx undefined for {len(dropped)} cell(s); excluded from the means above:")
+            for name, why in dropped:
+                print(f"    {name:<24} {why}")
 
 
 # --------------------------------------------------------------------------------------------------
