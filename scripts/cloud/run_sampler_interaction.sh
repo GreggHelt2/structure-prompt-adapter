@@ -25,6 +25,13 @@
 #                            and the length where M6 measured the +0.19 penalty
 #   A0A090ME36   90  all-b   short all-beta; the section 5.5 headliner, brackets the length effect
 #
+# ADHERENCE: `+eval.flywheel.prompt_struct` is REQUIRED and easy to omit. configs/eval/default.yaml sets
+# `prompt_struct: null`, and without it the flywheel reports tm=None for every cell, i.e. NO adherence at
+# all. The first smoke of this driver did exactly that: motif-RMSD and designability came through, TM did
+# not. That would have been fatal, since plan/36 section 4 makes adherence the more consequential half of
+# the question. run_eval.sh (b1_full), which this driver was modelled on, is designability-only and does
+# not pass it; run_b4_hardsoft.sh, run_scaffold_eval.sh, run_variant_desig.sh and run_8siu_hardsoft.sh all do.
+#
 # SCORING: scores under RFD3's criterion (N,CA,C at 1.5 A). ALL structures are retained and staged so the
 # project's usual CA-at-2.0 criterion can be recomputed offline from the SAME refolds, giving both cells of
 # the settings x criterion 2x2 without re-running (dev results/14 section 3).
@@ -125,6 +132,7 @@ while IFS=$'\t' read -r id contig; do
     eval.ckpt=/workspace/weights/spa.pt \
     eval.prompt_cache="$PREP/$id.pt" \
     +eval.motif.source_pdb="$PREP/$id.pdb" \
+    +eval.flywheel.prompt_struct="$PREP/$id.pdb" \
     "+eval.motif.contig='$contig'" \
     paths.rfd3_ckpt=/workspace/weights/rfd3_latest.ckpt \
     paths.proteinmpnn_repo="$MPNN_REPO" \
