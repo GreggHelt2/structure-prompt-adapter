@@ -8,6 +8,15 @@ length: 100                # design length (residues) for unconditional generati
 specification: null        # optional RFD3 DesignInputSpecification dict (augments/overrides `length`)
 num_timesteps: null        # RFD3 sampler steps (null -> effective default 100 from rfd3 edm.yaml, NOT the 200 its
                            #   docs/dataclass claim; verified 2026-07-03; set e.g. 200 to override. lower = faster/cheaper)
+# The other two sampler knobs. null -> INHERIT FROM THE RELEASED CHECKPOINT, which is how this project
+# silently ran at gamma_0=0.8 while the RFD3 paper used 0.6 throughout: the engine merges
+# checkpoint["train_cfg"] with inference_sampler_overrides, so an unset key leaves the checkpoint's value
+# standing. These were previously UNREACHABLE from config, not merely undocumented (review B4).
+# RFD3 paper Fig. S3f: "step scale eta = 1.5, noise level gamma_0 = 0.6, and 200 denoising steps (used
+# throughout this work unless otherwise specified)". Released checkpoint ships 100 / 0.8.
+# generate.py reads the values back off the LIVE sampler and ABORTS if an override did not take effect.
+gamma_0: null              # RFD3 sampler noise level (null -> checkpoint's 0.8; RFD3 paper uses 0.6)
+step_scale: null           # RFD3 sampler step scale, eta (null -> checkpoint's 1.5; RFD3 paper uses 1.5)
 seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
 ladder: null               # checkpoint-step ADHERENCE LADDER (scripts/eval/ladder_sweep.py, dev 13): list of
                            #   snapshot paths to sweep (adherence vs training step). null -> not a ladder run.
@@ -61,7 +70,12 @@ proteinmpnn:
 # Designability = best-of-K Cα scRMSD vs OF3 refolds; adherence = TM-score (+ Cα prompt-RMSD) vs the
 # prompt's source structure. All thresholds are knobs (dev root CLAUDE.md), never hardcoded in code.
 score:
-  scrmsd_cutoff: 2.0      # Å — best-of-K Cα scRMSD designability threshold (dev 05 §3 / 06 §6)
+  scrmsd_cutoff: 2.0      # Å — best-of-K scRMSD designability threshold (dev 05 §3 / 06 §6)
+  scrmsd_atoms: CA        # atom set for scRMSD: CA (this project's criterion, paired with 2.0 Å above)
+                          #   or "N,CA,C" (RFdiffusion3's own, which they pair with 1.5 Å). SET BOTH KNOBS
+                          #   TOGETHER when calibrating against their published rates — changing one alone
+                          #   is not comparable to anything. Default CA keeps every historical number
+                          #   bit-identical. Used by the M6 calibration run (scripts/cloud/run_m6_calibration.sh).
   plddt_cutoff: 80.0      # OF3 pLDDT designability gate (applied only when a pLDDT is supplied)
   tm_norm: prompt         # primary adherence TM normalization: prompt (fraction of prompt fold) | design | max
   diversity: true         # pairwise-TM diversity among the designable set (lower mean TM = more diverse)
