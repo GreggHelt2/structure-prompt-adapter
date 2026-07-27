@@ -63,6 +63,12 @@ add_env NUM_TIMESTEPS "${NUM_TIMESTEPS:-}"
 add_env SUBSET_IDS "${SUBSET_IDS:-}"
 add_env K_OVERRIDE "${K_OVERRIDE:-}"
 add_env NSEQ_OVERRIDE "${NSEQ_OVERRIDE:-}"
+# run_of3_batch_bench.sh knobs (dev plan/23 §7). KERNEL matters: the triton Evoformer kernel asserts a bias
+# batch-dim of 1, so it CANNOT batch — a bs>1 bench must run KERNEL=nokernel or it reports "no folds".
+add_env KERNEL "${KERNEL:-}"
+add_env BATCH_SIZES "${BATCH_SIZES:-}"
+add_env DESIGN_ID "${DESIGN_ID:-}"
+add_env N_SEQS "${N_SEQS:-}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;
