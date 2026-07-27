@@ -134,6 +134,14 @@ def _assert_sampler_effective(engine, requested: dict):
     was overridden. Raises only when a requested value did not take effect.
     """
     import logging
+    import sys
+
+    def _say(msg):
+        # print(), not logging: Hydra/container log levels swallowed logging.info in the M6 smoke
+        # job, which made the verification silently invisible. This line is provenance for every
+        # run and must survive any logger configuration.
+        print(msg, file=sys.stderr, flush=True)
+        print(msg, flush=True)
 
     sampler_obj = None
     for path in (("model", "net", "inference_sampler"), ("net", "inference_sampler"),
@@ -148,15 +156,14 @@ def _assert_sampler_effective(engine, requested: dict):
             break
 
     if sampler_obj is None:
-        logging.warning(
-            "[sampler] could not locate the live inference_sampler to verify overrides; "
-            "requested=%s. If this run is a calibration, VERIFY MANUALLY before trusting it.",
-            requested or "{} (checkpoint defaults)")
+        _say("[sampler] WARNING: could not locate the live inference_sampler to verify overrides; "
+             f"requested={requested or '{} (checkpoint defaults)'}. "
+             "If this run is a calibration, VERIFY MANUALLY before trusting it.")
         return
 
     effective = {k: getattr(sampler_obj, k, None) for k in ("num_timesteps", "gamma_0", "step_scale")}
-    logging.info("[sampler] effective: %s (requested overrides: %s)",
-                 effective, requested or "{} -> checkpoint defaults")
+    _say(f"[sampler] EFFECTIVE: {effective}  (requested overrides: "
+         f"{requested or '{} -> checkpoint defaults'})")
 
     mismatched = {
         k: (v, effective.get(k))
