@@ -76,6 +76,13 @@ add_env NSEQ "${NSEQ:-}"
 add_env SEED "${SEED:-}"
 add_env SCRMSD_ATOMS "${SCRMSD_ATOMS:-}"
 add_env SCRMSD_CUTOFF "${SCRMSD_CUTOFF:-}"
+# run_sampler_interaction.sh knobs (dev plan/36). ARM/K/NSEQ/SEED/SCRMSD_* above are shared with M6.
+# CONDITIONS and LAMBDAS are the factors this run sweeps; PREP_URI lets it reuse the b1_full prep,
+# and RESULTS_URI keeps a smoke from writing into the real results prefix.
+add_env CONDITIONS "${CONDITIONS:-}"
+add_env LAMBDAS "${LAMBDAS:-}"
+add_env PREP_URI "${PREP_URI:-}"
+add_env RESULTS_URI "${RESULTS_URI:-}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;
