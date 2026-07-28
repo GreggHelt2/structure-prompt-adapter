@@ -12,7 +12,7 @@ num_timesteps: null        # RFD3 sampler steps (null -> effective default 100 f
 # silently ran at gamma_0=0.8 while the RFD3 paper used 0.6 throughout: the engine merges
 # checkpoint["train_cfg"] with inference_sampler_overrides, so an unset key leaves the checkpoint's value
 # standing. These were previously UNREACHABLE from config, not merely undocumented (review B4).
-# RFD3 paper Fig. S3f: "step scale eta = 1.5, noise level gamma_0 = 0.6, and 200 denoising steps (used
+# RFD3 paper Fig. S4f: "step scale eta = 1.5, noise level gamma_0 = 0.6, and 200 denoising steps (used
 # throughout this work unless otherwise specified)". Released checkpoint ships 100 / 0.8.
 # generate.py reads the values back off the LIVE sampler and ABORTS if an override did not take effect.
 gamma_0: null              # RFD3 sampler noise level (null -> checkpoint's 0.8; RFD3 paper uses 0.6)

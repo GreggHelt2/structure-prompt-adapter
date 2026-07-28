@@ -192,7 +192,9 @@ def main() -> None:
     ap.add_argument("--lambda", dest="lam", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--num-timesteps", type=int, default=None, help="RFD3 sampler steps (None=200)")
+    ap.add_argument("--num-timesteps", type=int, default=None,
+                    help="RFD3 sampler steps (None -> inherit the checkpoint's 100, NOT the 200 the "
+                         "CLI/dataclass claim; see configs/eval/default.yaml)")
     ap.add_argument("--of3", action="store_true", help="also score designability scRMSD (ProteinMPNN→OF3)")
     ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "scaffold"))
     args = ap.parse_args()

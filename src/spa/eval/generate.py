@@ -96,7 +96,7 @@ def build_eval_engine(cfg):
     sampler: dict = {}
     if ev.get("num_timesteps") is not None:
         sampler["num_timesteps"] = int(ev.num_timesteps)
-    # gamma_0 = noise level, step_scale = eta. RFD3 paper (Fig. S3f): eta 1.5, gamma_0 0.6, 200 steps
+    # gamma_0 = noise level, step_scale = eta. RFD3 paper (Fig. S4f): eta 1.5, gamma_0 0.6, 200 steps
     # "used throughout this work unless otherwise specified". Checkpoint ships 100 / 0.8.
     if ev.get("gamma_0") is not None:
         sampler["gamma_0"] = float(ev.gamma_0)
