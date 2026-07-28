@@ -240,6 +240,26 @@ Without the `refolder` overrides the flywheel runs adherence-only (no OpenFold3)
 
 ---
 
+## Cloud (H100)
+
+The results in this repository were produced on a single H100 (`a3-highgpu-1g`) on Google Cloud Vertex
+AI, driven by the scripts in `scripts/cloud/`: full ESM3 prompt-cache generation, SPA training, and the
+batched ProteinMPNN plus OpenFold3 eval sweeps. Moving from the local A5000 to an H100 is a
+**configuration change, not a code change**: nothing hardware-specific is hardcoded (device, VRAM-driven
+batch and length caps, and storage paths all come from Hydra config), so the same entry points run on
+either machine. Training selects the cloud profile with `hardware=cloud_h100`.
+
+These `scripts/cloud/` submitters are included for transparency and reproducibility of the reported
+numbers, but they are **project-specific infrastructure, not a turnkey path**. They are wired to this
+project's own Google Cloud setup: a private storage bucket, project, and service account, Secret Manager
+keys (for example the NGC dataset key), and pinned artifacts (the RFdiffusion3 checkpoint, the dataset
+splits, the ESM3 cache tarballs, and a prebuilt container image in Artifact Registry). They will not run
+as-is for an external user without recreating that setup. To run RFdiffusion3 + SPA yourself, use the
+local path above (`scripts/setup/install_env.sh`, then `scripts/eval/generate.py`), which is the
+supported and portable route.
+
+---
+
 ## Repository layout
 
 ```
