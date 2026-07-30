@@ -38,6 +38,12 @@ def main():
     ap.add_argument("--of3-ckpt", default=None)
     ap.add_argument("--of3-runner-yaml", default=None)
     ap.add_argument("--of3-conda-env", default="spa-verify-of3")
+    ap.add_argument("--of3-batch-size", type=int, default=1,
+                    help="OF3 refold batch_size WITHIN each process. Batching and cross-process "
+                         "concurrency are orthogonal levers, so the figure that matters for a real run "
+                         "is bs=8 x P, not P alone (dev plan/57 §8). >1 forces the nokernel base yaml "
+                         "plus the of3_batch_patch.py shim: the triton kernels cannot batch "
+                         "(evoformer.py:915 asserts attention-bias batch dim = 1).")
     ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "of3_bench"))
     args = ap.parse_args()
 
@@ -62,10 +68,23 @@ def main():
     seqs = list(ss.sequences)[: int(args.n_seqs)]
     print(f"[bench] {len(seqs)} seqs of len {len(seqs[0])} for {d.stem}; parallels={args.parallels}")
 
+    B = int(args.of3_batch_size)
+    runner_yaml = _p(args.of3_runner_yaml, "OF3_RUNNER_YAML",
+                     ROOT / "structure-prompt-adapter/configs/of3/of3_nokernel.yml")
+    batch_shim = None
+    if B > 1:
+        nokernel = Path(__file__).resolve().parents[2] / "configs/of3/of3_nokernel.yml"
+        y = OmegaConf.create(OmegaConf.to_container(OmegaConf.load(str(nokernel)), resolve=False))
+        y["data_module_args"] = {**dict(y.get("data_module_args") or {}), "batch_size": B}
+        yf = out_dir / f"of3_runner_bs{B}.yml"; OmegaConf.save(y, yf)
+        runner_yaml = str(yf)
+        batch_shim = str(Path(__file__).resolve().parent / "of3_batch_patch.py")
+        print(f"[bench] batching ON within each process: bs={B} via {yf.name} + "
+              f"{Path(batch_shim).name} (nokernel forced; triton cannot batch)")
+
     rf = OF3Refolder(ckpt_path=_p(args.of3_ckpt, "OF3_CKPT", ROOT / "models/openfold3/of3-p2-155k.pt"),
-                     runner_yaml=_p(args.of3_runner_yaml, "OF3_RUNNER_YAML",
-                                    ROOT / "structure-prompt-adapter/configs/of3/of3_nokernel.yml"),
-                     out_dir=str(out_dir), conda_env=args.of3_conda_env)
+                     runner_yaml=runner_yaml, out_dir=str(out_dir), conda_env=args.of3_conda_env,
+                     batch_patch_shim=batch_shim)
 
     def spawn(shard_seqs, run_dir):
         run_dir.mkdir(parents=True, exist_ok=True)
