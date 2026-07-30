@@ -124,6 +124,12 @@ def main():
                                 "seed": int(a.proteinmpnn_seed), "model_name": "v_48_020",
                                 "weights_dir": None, "designs": None, "design_dir": None,
                                 "out_dir": str(fout / "seqs")},
+                # ⚠️ plddt_cutoff is INERT here and that is deliberate. `is_designable` applies the
+                # pLDDT gate only when a confidence is actually supplied, and `score_design` below is
+                # called without `plddt=`, so designability is **scRMSD only**. This matches
+                # score_threeway_designability.py and hence every designability number this project has
+                # published, which is why it is not "fixed": adding the gate here would silently make
+                # these rates incomparable with results/02, /05 and /22. Recorded in results/29 §3.
                 "score": {"scrmsd_cutoff": float(a.scrmsd_cutoff), "plddt_cutoff": 80.0,
                           "diversity": False},
             },
