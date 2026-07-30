@@ -216,7 +216,7 @@ def _force_determinism():
 
 
 def run(prompt_pdb, ckpt, length, timesteps, seed, K, device, out_json, control,
-        deterministic=False):
+        deterministic=False, lam=1.0):
     import torch
     from omegaconf import OmegaConf
 
@@ -256,7 +256,8 @@ def run(prompt_pdb, ckpt, length, timesteps, seed, K, device, out_json, control,
         print("[probe] CONTROL: both passes use the null token; every ratio must be exactly 0.")
     else:
         adapter.set_prompt(p[None].expand(K, -1, -1).to(device=dev, dtype=adtype).contiguous())
-    adapter.set_scale(1.0)
+    adapter.set_scale(float(lam))
+    print(f'[probe] lambda = {lam}')
 
     DeltaProbe = _make_probe_class()
     probe = DeltaProbe(net.diffusion_module, adapter, batch=K, control=control)
@@ -319,7 +320,7 @@ def run(prompt_pdb, ckpt, length, timesteps, seed, K, device, out_json, control,
         Path(out_json).write_text(json.dumps(
             {"summary": summary, "per_step": rows,
              "config": {"prompt_pdb": str(prompt_pdb), "ckpt": ckpt, "length": length,
-                        "timesteps": timesteps, "seed": seed, "K": K, "control": control, "deterministic": deterministic,
+                        "timesteps": timesteps, "seed": seed, "K": K, "lam": lam, "control": control, "deterministic": deterministic,
                         "determinism_applied": det_info}},
             indent=2))
         print(f"\n[probe] wrote {out_json}")
@@ -339,11 +340,13 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--control", action="store_true",
                     help="null-vs-null: validates the probe, every ratio must be exactly 0")
+    ap.add_argument("--lam", type=float, default=1.0,
+                    help="SPA lambda. 1.0 = the training value; 2.0 = where designability collapses")
     ap.add_argument("--deterministic", action="store_true",
                     help="try to force bitwise-reproducible forwards so the noise floor is 0")
     a = ap.parse_args()
     run(a.prompt_pdb, a.ckpt, a.length, a.timesteps, a.seed, a.num_designs,
-        a.device, a.out, a.control, a.deterministic)
+        a.device, a.out, a.control, a.deterministic, a.lam)
 
 
 if __name__ == "__main__":
