@@ -62,7 +62,11 @@ MATMUL_PRECISION="${MATMUL_PRECISION:-}"           # profile: 'high'=TF32 | 'hig
 DSWEEP="${DSWEEP:-}"                                # profile: comma list of D to sweep (e.g. 4,8,32)
 DIFFUSION_BATCH_SIZE="${DIFFUSION_BATCH_SIZE:-}"    # D — per-structure diffusion replicas (locked recipe=8; null->ckpt's 32)
 
-BOOT="set -e; git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} /opt/spa && bash /opt/spa/scripts/cloud/run_train.sh"
+# Pin the code revision and container digest (see _pin_run_env.sh). Must come AFTER IMAGE /
+# REPO_URL / GCLOUD are set and BEFORE BOOT is built.
+. "$(dirname "${BASH_SOURCE[0]}")/_pin_run_env.sh"
+
+BOOT="set -e; ${BOOT_CHECKOUT} && bash /opt/spa/scripts/cloud/run_train.sh"
 
 CFG="$(mktemp --suffix=.yaml)"
 cat > "${CFG}" <<YAML

@@ -39,7 +39,11 @@ STRATEGY="${STRATEGY:-ONDEMAND}"
 NAME="${NAME:-spa-scaffold-$(date -u +%Y%m%d-%H%M%S)}"
 GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
 
-BOOT="set -e; git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} /opt/spa && bash /opt/spa/scripts/cloud/run_scaffold_eval.sh"
+# Pin the code revision and container digest (see _pin_run_env.sh). Must come AFTER IMAGE /
+# REPO_URL / GCLOUD are set and BEFORE BOOT is built.
+. "$(dirname "${BASH_SOURCE[0]}")/_pin_run_env.sh"
+
+BOOT="set -e; ${BOOT_CHECKOUT} && bash /opt/spa/scripts/cloud/run_scaffold_eval.sh"
 
 CFG="$(mktemp --suffix=.yaml)"
 cat > "${CFG}" <<YAML
