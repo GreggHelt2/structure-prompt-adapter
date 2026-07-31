@@ -334,6 +334,15 @@ def run_grid(args):
     device = args.device
     dev = resolve_device(device)
     out_dir = Path(args.out_dir).expanduser().resolve(); out_dir.mkdir(parents=True, exist_ok=True)
+    # Record the as-run config before spending GPU time. This driver bypasses
+    # spa.eval.generate.generate(), which writes provenance for the drivers that use it,
+    # so it writes its own (dev audit 2026-07-31).
+    from spa.eval import provenance as _prov
+    _prov.write(out_dir, None, prompts=_prov_prompts(args),
+                purpose='three-way A+B+C: hard pinned motif, localized soft-SPA region, free region',
+                scope='ADHERENCE ONLY; designability is a separate scoring pass',
+                extra=vars(args), started=_prov._now_pacific())
+
 
     layouts = ([s.strip().upper() for s in args.layouts.split(",") if s.strip()]
                if args.layouts else [str(args.layout).upper()])
@@ -479,6 +488,17 @@ def _print_grid(grid, lambdas):
 
 # --------------------------------------------------------------------------------------------------
 
+
+
+def _prov_prompts(args):
+    """Prompt-ish CLI args, for the provenance record's split lookup. Driver-agnostic:
+    each probe names its targets differently (--g1/--g2, --target, --foreign)."""
+    vals = []
+    for k in ("g1", "g2", "target", "foreign", "prompt", "prompt_pdb", "fold", "folds"):
+        v = getattr(args, k, None)
+        if v:
+            vals.extend(str(v).split(",") if isinstance(v, str) else [str(v)])
+    return [v.strip() for v in vals if v and v.strip()]
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

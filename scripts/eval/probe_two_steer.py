@@ -173,6 +173,15 @@ def run_two_steer(args):
     device = args.device
     dev = resolve_device(device)
     out_dir = Path(args.out_dir).expanduser().resolve(); out_dir.mkdir(parents=True, exist_ok=True)
+    # Record the as-run config before spending GPU time. This driver bypasses
+    # spa.eval.generate.generate(), which writes provenance for the drivers that use it,
+    # so it writes its own (dev audit 2026-07-31).
+    from spa.eval import provenance as _prov
+    _prov.write(out_dir, None, prompts=_prov_prompts(args),
+                purpose='multi-prompt SPA: two chain regions steered to two different folds around a pinned motif',
+                scope='ADHERENCE ONLY unless a scoring stage was run separately; no ProteinMPNN/OpenFold3 here',
+                extra=vars(args), started=_prov._now_pacific())
+
 
     cells = _parse_cells(args.cells)
     lam = float(args.lambda_scale)
@@ -317,6 +326,17 @@ def _print_matrix(results, lam):
     print("[read] both R{1,2}steer > 0 with cross ≈ 0 (and Δmotif ≈ 0) ⇒ two disjoint region masks steer two")
     print("       flanks to two folds around one pinned motif, without bleed. Pick g1:g2 for the figure.")
 
+
+
+def _prov_prompts(args):
+    """Prompt-ish CLI args, for the provenance record's split lookup. Driver-agnostic:
+    each probe names its targets differently (--g1/--g2, --target, --foreign)."""
+    vals = []
+    for k in ("g1", "g2", "target", "foreign", "prompt", "prompt_pdb", "fold", "folds"):
+        v = getattr(args, k, None)
+        if v:
+            vals.extend(str(v).split(",") if isinstance(v, str) else [str(v)])
+    return [v.strip() for v in vals if v and v.strip()]
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

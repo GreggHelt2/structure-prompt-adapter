@@ -30,6 +30,17 @@ _OUTPUTS_ROOT = Path(os.environ.get(
 ROOT = Path("/home/user1/projects/spa")
 
 
+
+def _prov_prompts(args):
+    """Prompt-ish CLI args, for the provenance record's split lookup. Driver-agnostic:
+    each probe names its targets differently (--g1/--g2, --target, --foreign)."""
+    vals = []
+    for k in ("g1", "g2", "target", "foreign", "prompt", "prompt_pdb", "fold", "folds"):
+        v = getattr(args, k, None)
+        if v:
+            vals.extend(str(v).split(",") if isinstance(v, str) else [str(v)])
+    return [v.strip() for v in vals if v and v.strip()]
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pdbs", nargs="+", required=True, help="design PDB backbones to score")
@@ -66,6 +77,23 @@ def main():
     _p = lambda ov, env, dflt: str(ov or os.environ.get(env) or dflt)
 
     out_dir = Path(args.out_dir).expanduser().resolve(); out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Record the as-run config before spending GPU time. This driver bypasses
+
+    # spa.eval.generate.generate(), which writes provenance for the drivers that use it,
+
+    # so it writes its own (dev audit 2026-07-31).
+
+    from spa.eval import provenance as _prov
+
+    _prov.write(out_dir, None, prompts=_prov_prompts(args),
+
+                purpose='score already-generated three-way designs through ProteinMPNN and OpenFold3',
+
+                scope='DESIGNABILITY ONLY; consumes existing backbones, generates none',
+
+                extra=vars(args), started=_prov._now_pacific())
+
     cfg = OmegaConf.create({
         "paths": {
             "proteinmpnn_repo": _p(args.proteinmpnn_repo, "PROTEINMPNN_REPO", ROOT / "needed_repos/ProteinMPNN"),

@@ -639,6 +639,14 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     out_dir.mkdir(parents=True, exist_ok=True)
     pid = _prompt_id(cfg)
 
+    # Record the as-run config BEFORE spending GPU time, so a crashed or killed run still leaves a
+    # usable record (dev audit 2026-07-31: 26 of 104 local run dirs had no recoverable config, and
+    # the artifacts cannot be regenerated because the sampler is not bitwise reproducible). Writing
+    # it here covers every driver that routes through generate(); the probe drivers, which drive the
+    # engine directly via _run_once, call spa.eval.provenance.write themselves.
+    from . import provenance as _prov
+    _prov.write(out_dir, cfg, started=_prov._now_pacific())
+
     if engine is None:
         engine = build_eval_engine(cfg)
     net = frozen_rfd3_net(engine)

@@ -414,6 +414,17 @@ def _print_ratio_trend(summ, lambdas):
 # --------------------------------------------------------------------------------------------------
 
 
+
+def _prov_prompts(args):
+    """Prompt-ish CLI args, for the provenance record's split lookup. Driver-agnostic:
+    each probe names its targets differently (--g1/--g2, --target, --foreign)."""
+    vals = []
+    for k in ("g1", "g2", "target", "foreign", "prompt", "prompt_pdb", "fold", "folds"):
+        v = getattr(args, k, None)
+        if v:
+            vals.extend(str(v).split(",") if isinstance(v, str) else [str(v)])
+    return [v.strip() for v in vals if v and v.strip()]
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ckpt", required=True, help="multigranularity SPA checkpoint (variant C)")
@@ -438,6 +449,15 @@ def main():
     ratios = [float(x) for x in args.ratios.split(",") if x.strip()]
     lambdas = [float(x) for x in args.lambdas.split(",") if x.strip()]
     out_dir = Path(args.out_dir).expanduser().resolve(); out_dir.mkdir(parents=True, exist_ok=True)
+    # Record the as-run config before spending GPU time. This driver bypasses
+    # spa.eval.generate.generate(), which writes provenance for the drivers that use it,
+    # so it writes its own (dev audit 2026-07-31).
+    from spa.eval import provenance as _prov
+    _prov.write(out_dir, None, prompts=_prov_prompts(args),
+                purpose='localization probe: steer a sub-region toward a foreign fold, measure drag on the free region',
+                scope='ADHERENCE ONLY; no ProteinMPNN/OpenFold3',
+                extra=vars(args), started=_prov._now_pacific())
+
 
     # Cα counts for every structure referenced (foreign always; hosts if host_domain).
     need = set(foreign) | (set(hosts) if "host_domain" in frames else set())
