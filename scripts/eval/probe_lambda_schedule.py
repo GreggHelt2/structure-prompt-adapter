@@ -61,7 +61,11 @@ def main():
     ap.add_argument("-K", "--num-designs", type=int, default=8)
     ap.add_argument("--timesteps", type=int, default=None, help="None -> checkpoint default (100)")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--target-lambda", type=float, default=1.0)
+    ap.add_argument("--target-lambda", default="1.0",
+                    help="target MEAN λ. Accepts a comma list to sweep several in ONE invocation, "
+                         "which matters because ESM3 loads once per invocation: seven separate runs "
+                         "would pay that cost seven times. With >1 value, shape arms are named "
+                         "<shape>_L<target> and each is checked against its OWN target.")
     ap.add_argument("--shapes", default=None, help="comma-separated; default = all")
     ap.add_argument("--support", default="0.35,0.85", help="trajectory-fraction support a,b")
     ap.add_argument("--teeth", type=int, default=3)
@@ -129,15 +133,24 @@ def main():
     # design reproduce". Loaded once; TM-score is CPU-only so scoring adds seconds, not minutes.
     prompt_struct = None if a.no_score else _as_struct(str(a.prompt_pdb))
 
+    targets = [float(x) for x in str(a.target_lambda).split(",") if x.strip()]
+    multi = len(targets) > 1
     names = a.shapes.split(",") if a.shapes else shape_names(support=support, teeth=a.teeth)
+    # (arm_label, shape, target) so a multi-target sweep shares one engine and one ESM3 load
+    shape_arms = [(f"{s}_L{t:g}" if multi else s, s, t) for t in targets for s in names]
     # Control arms are flat λ pushed through the SAME hook. They are NOT matched-mean, on purpose, so
     # they are gated separately below and never enter the shape comparison.
     controls = {f"ctrl_lam{float(v):g}": float(v)
                 for v in (a.hook_const.split(",") if a.hook_const.strip() else [])}
-    arms, rows = ["baseline"] + names + list(controls), []
+    arm_spec = ([("baseline", None, 0.0)] + shape_arms
+                + [(k, None, v) for k, v in controls.items()])
+    arms, rows = [s[0] for s in arm_spec], []
+    tgt_of = {s[0]: s[2] for s in arm_spec}
+    shape_of = {s[0]: s[1] for s in arm_spec}
 
     for arm in arms:
         t0 = time.time()
+        target = tgt_of[arm]
         hook = original = None
         is_control = arm in controls
         if arm == "baseline":
@@ -147,7 +160,7 @@ def main():
             if is_control:
                 values = [controls[arm]] * n_sched      # flat, unnormalized: a control, not a comparison arm
             else:
-                values = build(arm, n_sched, a.target_lambda, support=support, teeth=a.teeth)
+                values = build(shape_of[arm], n_sched, target, support=support, teeth=a.teeth)
             adapter.set_prompt(prompt)
             hook = ScheduledLambda(net.diffusion_module, adapter, values)
             original = hook.install(net)
@@ -164,7 +177,7 @@ def main():
 
         realized = hook.realized_mean() if hook else 0.0
         calls = hook.calls if hook else 0
-        ok = (arm == "baseline") or is_control or abs(realized - a.target_lambda) <= a.tol
+        ok = (arm == "baseline") or is_control or abs(realized - target) <= a.tol
         adir = out_dir / arm; adir.mkdir(parents=True, exist_ok=True)
         paths = []
         for i, o in enumerate(outs):
@@ -191,7 +204,8 @@ def main():
             div = tm_mean = tm_med = None
 
         rows.append({"arm": arm, "is_control": is_control, "n_designs": len(outs), "calls": calls,
-                     "schedule_len": len(values), "target_lambda": a.target_lambda,
+                     "schedule_len": len(values), "target_lambda": target,
+                     "shape": shape_of[arm],
                      "realized_mean_lambda": realized, "matched_mean_ok": ok,
                      "lambda_min": min(values) if values else 0.0,
                      "lambda_max": max(values) if values else 0.0,
@@ -254,7 +268,7 @@ def main():
         Path(a.json).write_text(json.dumps({
             "arms": rows,
             "config": {"prompt_pdb": str(a.prompt_pdb), "ckpt": a.ckpt, "length": a.length,
-                       "K": a.num_designs, "seed": a.seed, "target_lambda": a.target_lambda,
+                       "K": a.num_designs, "seed": a.seed, "target_lambda": targets,
                        "num_timesteps": n_timesteps, "schedule_len": n_sched,
                        "support": list(support), "teeth": a.teeth, "tm_norm": "prompt",
                        "scored": prompt_struct is not None},
