@@ -3,18 +3,35 @@
 # SOFT conditioning (variant C / Run A): does SPA steer a design toward a *recognizable* fold given that
 # fold's ESM3 prompt? The poster "headliner" — folds CDDB's anonymous metagenomic monomers can't show.
 #
-# ⚠️ CLAIM FORK (dev 12 §1/§5/§7):
-#   - QUALITATIVE demo  -> ready now: external PDBs are NOT in the CDDB cache, so fresh ESM3 prompts were
-#     computed (staged at gs://…/eval/b4/prep/). No held-out claim.
-#   - HELD-OUT claim    -> additionally needs a Foldseek homology-check vs the CDDB TRAIN split (Foldseek is
-#     NOT installed; also needs a ~364k train-split Foldseek DB build). Only then can a demo be called
-#     "held-out / generalization". Foldseek is NOT part of the ProteinMPNN->OF3 flywheel.
+# ⛔ CLAIM FORK RESOLVED 2026-07-31. The answer is QUALITATIVE, permanently.
+#
+# The Foldseek homology check this file gated the "held out" label on has now RUN, and it did NOT pass:
+# all six folds below (plus 1CEX and 1EMA) have a same-fold relative in the CDDB train split. Under the
+# rule pre-registered BEFORE the run (max-TM < 0.40 clean, >= 0.50 same-fold present), 10 of 10 queries
+# landed at >= 0.50 against BOTH the full 364,373-structure train split AND the 94,914 structures the
+# b4 checkpoints actually sampled. Range 0.68 to 0.97, nothing anywhere near 0.40:
+#
+#   6E6R 0.9717 | 7RPN 0.9588 | 7SBD 0.9414 | 7YII 0.9183 | 8SIU 0.9114 | 1QY3 0.7993   (vs train)
+#
+# ⭐ WHY, and it is NOT a split failure: the test and validate splits, held out by construction, return
+# essentially the same numbers (8SIU 0.9114 train vs 0.9062 test vs 0.9111 validate). CDDB is built from
+# AFDB cluster representatives, so it samples nature's fold space, and these folds were chosen precisely
+# because they are the most recognizable ones there are. NO split of CDDB could have made them
+# fold-novel. "CDDB is not a subset of the PDB" (dev 12 §2) is still true and was never the axis at issue.
+#
+# ⚠️ A PASS would NOT have licensed a bare "held out" either: ESM3 was trained on the PDB and ESM3 is the
+# prompt encoder, so the most an external prompt can ever earn here is "held out from SPA training".
+#
+# ⇒ These stay QUALITATIVE demos: recognizable folds that CDDB's anonymous metagenomic monomers cannot
+#   show a reader. That is what they were always used for, and no paper claim depends on them.
+#
+# Full record, per-query tables, saturation check, provenance: dev docs/results/31_external_prompt_homology.md
 #
 # Prep: scripts computed a single-chain ESM3 prompt per fold (chain extraction so TM-scoring uses the same
 # one chain). All ≤384 res -> H100-only band (le384). Deploy via run_variant_desig.sh over gs://…/eval/b4/prep
 # (BAND=le384, VARIANTS=C, LAM=0.5,1,2, K=8, N=8). esmGFP has no PDB (a synthesis) -> 1QY3 is the GFP scaffold.
 
-claim_status: qualitative            # -> "held_out" once the Foldseek check passes
+claim_status: qualitative            # FINAL: the Foldseek check RAN 2026-07-31 and did not pass. See above.
 prep_uri: gs://genomancer-spa-cache/eval/b4/prep
 pdb_source: RCSB                     # https://files.rcsb.org/download/<ID>.pdb
 
