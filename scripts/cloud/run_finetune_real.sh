@@ -33,9 +33,11 @@ python -c "import torch; assert torch.cuda.is_available(), 'no CUDA'; print('GPU
 [ -d "$SPA_REPO/.git" ] || git clone --depth 1 --branch "${REPO_REF:-main}" "${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}" "$SPA_REPO"
 pip install -e "$SPA_REPO" --no-deps -q
 
-# --- HF token, needed for ESM3 (run_cache_gen.sh's pattern) ---
-export HF_TOKEN="$(gcloud secrets versions access latest --secret=spa-hf-token --project="$PROJECT")"
-export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+# --- ESM3 needs NO token: it is MIT-licensed and ungated (root CLAUDE.md, Model Weights), unlike the
+# older non-commercial ESM3 Community License. A first real-run attempt (2026-08-14) exported the
+# spa-hf-token secret anyway (mirroring run_cache_gen.sh's pattern for other, gated resources) and hit
+# a hard 401 (invalid/expired token), which an ANONYMOUS request to a public repo would not have hit at
+# all. Deliberately not exporting HF_TOKEN/HUGGING_FACE_HUB_TOKEN here for that reason.
 
 # --- Fetch the neighborhood: 50 PDBs + the custom train/manifest.parquet (dev plan/69 SS4.11/4.12) ---
 STAGE="$OUT/neighborhood"
@@ -56,9 +58,51 @@ python "$SPA_REPO/scripts/gen_esm3_cache.py" \
   data.pdb_dir="$STAGE/pdb" \
   out_dir="$CACHE_DIR"
 
+# set -uo pipefail (not -e) means a failed cache-gen call above would NOT stop this script -- exactly
+# how a first real-run attempt (2026-08-14) silently limped forward past a failed ESM3 step straight
+# into a guaranteed downstream crash. Check for real output explicitly instead of trusting the exit code.
+N_CACHED=$(ls "$CACHE_DIR"/*.pt 2>/dev/null | wc -l)
+if [ "$N_CACHED" -lt "$N_PDB" ]; then
+  log "FATAL: ESM3 cache has $N_CACHED/$N_PDB structures -- cache-gen did not complete cleanly"
+  exit 1
+fi
+log "ESM3 cache OK: $N_CACHED/$N_PDB structures"
+
 # --- Fetch the RFD3 checkpoint ---
 mkdir -p /workspace/weights
 gcloud storage cp "$RFD3_CKPT_URI" /workspace/weights/rfd3_latest.ckpt
+
+# --- Resolve foundry's training-transform cfg dir (verbatim from run_train.sh step 8, dev 04 SS11 input
+# 5). CDDBPromptDataset.transform (unlike the toy path the smoke test used) calls build_train_transform,
+# which needs pdb/base_transform_args.yaml + rfd3_monomer_distillation.yaml. The default
+# paths.foundry_train_cfg_dir points at needed_repos/foundry/..., a local-dev-box path absent from this
+# env-only image -- a first real-run attempt (2026-08-14) crashed on exactly this, immediately, before
+# logging even one loss value. Locate it inside the installed rfd3 package instead. ---
+log "resolving foundry train-cfg dir"
+FOUNDRY_TRAIN_CFG_DIR="$(python - <<'PY'
+import os, glob
+try:
+    import rfd3
+except Exception:
+    print(""); raise SystemExit
+seen, hit = set(), ""
+start = os.path.dirname(rfd3.__file__)
+roots = [start, os.path.dirname(start), os.path.dirname(os.path.dirname(start))]
+for r in roots:
+    if not r or r in seen: continue
+    seen.add(r)
+    for p in glob.glob(os.path.join(r, "**", "datasets", "train", "pdb", "base_transform_args.yaml"), recursive=True):
+        hit = os.path.dirname(os.path.dirname(p)); break
+    if hit: break
+print(hit)
+PY
+)"
+if [ -z "$FOUNDRY_TRAIN_CFG_DIR" ] || [ ! -f "$FOUNDRY_TRAIN_CFG_DIR/pdb/base_transform_args.yaml" ] \
+   || [ ! -f "$FOUNDRY_TRAIN_CFG_DIR/rfd3_monomer_distillation.yaml" ]; then
+  log "FATAL: could not locate foundry train-cfg dir (needs pdb/base_transform_args.yaml + rfd3_monomer_distillation.yaml)"
+  exit 1
+fi
+log "FOUNDRY_TRAIN_CFG_DIR=$FOUNDRY_TRAIN_CFG_DIR"
 
 log "config: host_lr=$HOST_LR max_steps=$MAX_STEPS ckpt_every=$CKPT_EVERY neighborhood=$N_PDB structures"
 
@@ -72,6 +116,7 @@ python scripts/train.py \
   variant=C_n_by_1536 hardware=cloud_h100 data=cddb \
   paths.rfd3_ckpt=/workspace/weights/rfd3_latest.ckpt \
   paths.esm3_cache_dir="$CACHE_DIR" \
+  paths.foundry_train_cfg_dir="$FOUNDRY_TRAIN_CFG_DIR" \
   data.pdb_dir="$STAGE/pdb" \
   data.splits_root="$STAGE/splits" \
   train.finetune_host_lr="$HOST_LR" \
