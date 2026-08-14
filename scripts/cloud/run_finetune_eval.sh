@@ -25,8 +25,8 @@ set -uo pipefail
 
 PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
-RFD3_FINETUNED_CKPT_URI="${RFD3_FINETUNED_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/rfd3_C_finetuned_full_cloudgen.ckpt}"
-SPA_ADAPTER_CKPT_URI="${SPA_ADAPTER_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/spa_C_final.pt}"
+RFD3_FINETUNED_CKPT_URI="${RFD3_FINETUNED_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/rfd3_Nx1536_finetuned_full_cloudgen.ckpt}"
+SPA_ADAPTER_CKPT_URI="${SPA_ADAPTER_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/spa_Nx1536_final.pt}"
 OF3_CKPT_URI="${OF3_CKPT_URI:-$BUCKET/weights/of3-p2-155k.pt}"
 TARGET_PDB_URI="${TARGET_PDB_URI:-$BUCKET/eval/finetune_neighborhood/A0A7S3EB45/target.pdb}"
 LENGTH="${LENGTH:-125}"                # matches the target's own length (dev plan/69 SS4.13)

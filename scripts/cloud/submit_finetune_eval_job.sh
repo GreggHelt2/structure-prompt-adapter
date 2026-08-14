@@ -7,7 +7,7 @@
 #   - PUBLIC repo PUSHED @ $REPO_REF
 #   - spa-combined image already in Artifact Registry
 #   - PINNED GCS: $BUCKET/weights/of3-p2-155k.pt
-#   - $BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/{rfd3_C_finetuned_full.ckpt,spa_C_final.pt}
+#   - $BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/{rfd3_Nx1536_finetuned_full_cloudgen.ckpt,spa_Nx1536_final.pt}
 #   - $BUCKET/eval/finetune_neighborhood/A0A7S3EB45/target.pdb
 #
 # Usage:
@@ -26,8 +26,8 @@ SA="${SA:-spa-worker@spa-dev-499900.iam.gserviceaccount.com}"
 REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
-RFD3_FINETUNED_CKPT_URI="${RFD3_FINETUNED_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/rfd3_C_finetuned_full_cloudgen.ckpt}"
-SPA_ADAPTER_CKPT_URI="${SPA_ADAPTER_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/spa_C_final.pt}"
+RFD3_FINETUNED_CKPT_URI="${RFD3_FINETUNED_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/rfd3_Nx1536_finetuned_full_cloudgen.ckpt}"
+SPA_ADAPTER_CKPT_URI="${SPA_ADAPTER_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/spa_Nx1536_final.pt}"
 OF3_CKPT_URI="${OF3_CKPT_URI:-$BUCKET/weights/of3-p2-155k.pt}"
 TARGET_PDB_URI="${TARGET_PDB_URI:-$BUCKET/eval/finetune_neighborhood/A0A7S3EB45/target.pdb}"
 RESULTS_URI="${RESULTS_URI:-$BUCKET/eval/finetune_comparison/A0A7S3EB45}"
