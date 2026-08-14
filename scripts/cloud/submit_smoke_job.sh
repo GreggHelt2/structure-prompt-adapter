@@ -29,7 +29,7 @@ RUN_SCRIPT="${RUN_SCRIPT:-run_smoke.sh}"            # in-container script under 
 LENGTHS="${LENGTHS:-}"                              # calibration only: comma lengths for run_calib.sh (ignored otherwise)
 STRATEGY="${STRATEGY:-ONDEMAND}"                    # ONDEMAND -> the approved H100 quota; omit scheduling
 NAME="${NAME:-spa-smoke-$(date -u +%Y%m%d-%H%M%S)}"
-GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
+GCLOUD="${GCLOUD:-gcloud}"                          # PATH lookup, portable across machines; override to a full path if not on PATH
 
 # Pin the code revision and container digest (see _pin_run_env.sh). Must come AFTER IMAGE /
 # REPO_URL / GCLOUD are set and BEFORE BOOT is built.
@@ -37,7 +37,7 @@ GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
 
 BOOT="set -e; ${BOOT_CHECKOUT} && bash /opt/spa/scripts/cloud/${RUN_SCRIPT}"
 
-CFG="$(mktemp --suffix=.yaml)"
+CFG="$(mktemp)"   # no --suffix: GNU-only flag, absent on macOS/BSD mktemp; gcloud --config doesn't need the extension
 cat > "${CFG}" <<YAML
 workerPoolSpecs:
   - machineSpec:

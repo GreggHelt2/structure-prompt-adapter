@@ -28,7 +28,7 @@ DISK_GB="${DISK_GB:-200}"           # probe ~65GB; full run (cap=512) peaks ~550
 STRATEGY="${STRATEGY:-ONDEMAND}"    # ONDEMAND -> "Custom model training Nvidia H100 GPUs" quota (approved 1+1).
                                     # SPOT | FLEX_START use the *preemptible* H100 quota (separate bucket, =0 here).
 NAME="${NAME:-spa-cachegen-$(date -u +%Y%m%d-%H%M%S)}"
-GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
+GCLOUD="${GCLOUD:-gcloud}"                          # PATH lookup, portable across machines; override to a full path if not on PATH
 
 # Pin the code revision and container digest (see _pin_run_env.sh). Must come AFTER IMAGE /
 # REPO_URL / GCLOUD are set and BEFORE BOOT is built.
@@ -36,7 +36,7 @@ GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
 
 BOOT="set -e; ${BOOT_CHECKOUT} && bash /opt/spa/scripts/cloud/run_cache_gen.sh"
 
-CFG="$(mktemp --suffix=.yaml)"
+CFG="$(mktemp)"   # no --suffix: GNU-only flag, absent on macOS/BSD mktemp; gcloud --config doesn't need the extension
 cat > "${CFG}" <<YAML
 workerPoolSpecs:
   - machineSpec:

@@ -37,7 +37,7 @@ LEAN_RESULTS="${LEAN_RESULTS:-}"                    # 1 -> metrics JSON only (no
 DISK_GB="${DISK_GB:-200}"                           # ckpts + OF3 working set (no 250 GB cache here)
 STRATEGY="${STRATEGY:-ONDEMAND}"
 NAME="${NAME:-spa-scaffold-$(date -u +%Y%m%d-%H%M%S)}"
-GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
+GCLOUD="${GCLOUD:-gcloud}"                          # PATH lookup, portable across machines; override to a full path if not on PATH
 
 # Pin the code revision and container digest (see _pin_run_env.sh). Must come AFTER IMAGE /
 # REPO_URL / GCLOUD are set and BEFORE BOOT is built.
@@ -45,7 +45,7 @@ GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
 
 BOOT="set -e; ${BOOT_CHECKOUT} && bash /opt/spa/scripts/cloud/run_scaffold_eval.sh"
 
-CFG="$(mktemp --suffix=.yaml)"
+CFG="$(mktemp)"   # no --suffix: GNU-only flag, absent on macOS/BSD mktemp; gcloud --config doesn't need the extension
 cat > "${CFG}" <<YAML
 workerPoolSpecs:
   - machineSpec:

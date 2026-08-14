@@ -27,7 +27,7 @@ BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 DISK_GB="${DISK_GB:-150}"                    # image + RFD3 (2.9G) + OF3 (2.3G) + SPA multigran + designs
 STRATEGY="${STRATEGY:-ONDEMAND}"
 NAME="${NAME:-spa-threeway-${STAGE:-adherence}-$(date -u +%Y%m%d-%H%M%S)}"
-GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
+GCLOUD="${GCLOUD:-gcloud}"                          # PATH lookup, portable across machines; override to a full path if not on PATH
 
 RUN_SCRIPT="${RUN_SCRIPT:-run_threeway_sweep.sh}"   # in-container runner (run_threeway_sweep.sh | run_of3_batch_bench.sh)
 # Pin the code revision and container digest (see _pin_run_env.sh). Must come AFTER IMAGE /
@@ -36,7 +36,7 @@ RUN_SCRIPT="${RUN_SCRIPT:-run_threeway_sweep.sh}"   # in-container runner (run_t
 
 BOOT="set -e; ${BOOT_CHECKOUT} && bash /opt/spa/scripts/cloud/${RUN_SCRIPT}"
 
-CFG="$(mktemp --suffix=.yaml)"
+CFG="$(mktemp)"   # no --suffix: GNU-only flag, absent on macOS/BSD mktemp; gcloud --config doesn't need the extension
 cat > "${CFG}" <<YAML
 workerPoolSpecs:
   - machineSpec:

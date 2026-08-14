@@ -45,7 +45,7 @@ DISK_GB="${DISK_GB:-650}"                          # full run peaks high; probe:
 STRATEGY="${STRATEGY:-ONDEMAND}"                   # ONDEMAND -> the approved H100 quota (07 W5.6); omit scheduling
 NAME="${NAME:-spa-train-$(date -u +%Y%m%d-%H%M%S)}"
 CKPT_OUT_URI="${CKPT_OUT_URI:-$BUCKET/checkpoints/$NAME}"
-GCLOUD="${GCLOUD:-/home/user1/google-cloud-sdk/bin/gcloud}"
+GCLOUD="${GCLOUD:-gcloud}"                          # PATH lookup, portable across machines; override to a full path if not on PATH
 
 # Optional knobs — omitted from the env block when empty (W5.7: Vertex rejects an empty env value).
 REQUIRE_CACHED_PROMPT="${REQUIRE_CACHED_PROMPT:-}" # true for the probe rehearsal
@@ -68,7 +68,7 @@ DIFFUSION_BATCH_SIZE="${DIFFUSION_BATCH_SIZE:-}"    # D — per-structure diffus
 
 BOOT="set -e; ${BOOT_CHECKOUT} && bash /opt/spa/scripts/cloud/run_train.sh"
 
-CFG="$(mktemp --suffix=.yaml)"
+CFG="$(mktemp)"   # no --suffix: GNU-only flag, absent on macOS/BSD mktemp; gcloud --config doesn't need the extension
 cat > "${CFG}" <<YAML
 workerPoolSpecs:
   - machineSpec:

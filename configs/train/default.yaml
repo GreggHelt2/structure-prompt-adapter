@@ -1,6 +1,11 @@
 # Optimizer / schedule / CFG / checkpointing (dev 04 §5–§6; 03 §8).
 epochs: 7               # dev 04 Phase 2: 7–14 epochs
 lr: 1.0e-4
+finetune_host_lr: null  # null = RFD3 stays frozen (default, SPA-only training). A float unfreezes
+                         # RFD3's own parameters into a SECOND optimizer param group at this LR
+                         # (Option B fine-tuning upper bound, dev plan/69 §4.2/§4.5-4.8). Conservative
+                         # starting guess for a pretrained-weight fine-tune, ~10x below `lr`; the
+                         # smoke test (dev plan/69 §4.8 item 1) is what validates this doesn't diverge.
 weight_decay: 0.0
 optimizer: adamw
 warmup_steps: 500

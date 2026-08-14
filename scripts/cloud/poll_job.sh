@@ -7,10 +7,14 @@ set -uo pipefail
 JOBID="${1:?usage: poll_job.sh <jobNumericId> [region] [project]}"
 REGION="${2:-us-west1}"
 PROJECT="${3:-spa-dev-499900}"
-GC=/home/user1/google-cloud-sdk/bin/gcloud
+GC="${GC:-gcloud}"   # PATH lookup, portable across machines; override to a full path if not on PATH
 
 read -r STATE CREATE < <("$GC" ai custom-jobs describe "$JOBID" --region="$REGION" --project="$PROJECT" --format='value(state,createTime)' 2>/dev/null)
-echo "state: ${STATE:-?}   (~$(( ( $(date +%s) - $(date -d "${CREATE:-now}" +%s 2>/dev/null || date +%s) ) / 60 )) min since create)"
+# Portable ISO-8601 (gcloud createTime, e.g. 2026-08-13T22:14:55.475285Z) -> epoch seconds. GNU `date -d`
+# first (Linux); BSD `date -j -f` (macOS) as fallback, stripping fractional seconds and the trailing Z
+# that -j -f's fixed format can't parse directly; `date +%s` (now) as the last resort either way.
+iso_to_epoch(){ date -d "$1" +%s 2>/dev/null || date -j -u -f '%Y-%m-%dT%H:%M:%S' "${1%%.*}" +%s 2>/dev/null || date +%s; }
+echo "state: ${STATE:-?}   (~$(( ( $(date +%s) - $(iso_to_epoch "${CREATE:-now}") ) / 60 )) min since create)"
 
 logs(){ "$GC" logging read "resource.type=\"ml_job\" AND resource.labels.job_id=\"$JOBID\"" \
   --project="$PROJECT" --order=desc --limit="${1:-200}" --format='value(textPayload)' 2>&1 \
