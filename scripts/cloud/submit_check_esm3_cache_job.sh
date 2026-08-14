@@ -13,7 +13,7 @@
 # Usage:
 #   DRY_RUN=1 ./submit_check_esm3_cache_job.sh                                    # print the spec only
 #   ./submit_check_esm3_cache_job.sh                                               # real launch
-#   NEIGHBORHOOD_TSV=/opt/spa-data/neighborhood.tsv ./submit_check_esm3_cache_job.sh  # also check coverage
+#   NEIGHBORHOOD_TSV_URI=/opt/spa-data/neighborhood.tsv ./submit_check_esm3_cache_job.sh  # also check coverage
 #
 # Cost: no GPU compute, just a same-region GCS->GCE download (234.67 GB, should be fast on GCP's
 # internal network) plus a sequential tar listing. Dominated by H100 provisioning + download time;
@@ -28,7 +28,7 @@ REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 CACHE_TAR_URI="${CACHE_TAR_URI:-$BUCKET/esm3_cache.tar}"
-NEIGHBORHOOD_TSV="${NEIGHBORHOOD_TSV:-}"
+NEIGHBORHOOD_TSV_URI="${NEIGHBORHOOD_TSV_URI:-}"
 DISK_GB="${DISK_GB:-300}"                          # tar is 234.67 GB; real headroom for the listing file
 STRATEGY="${STRATEGY:-ONDEMAND}"
 NAME="${NAME:-spa-esm3-cache-audit-$(date -u +%Y%m%d-%H%M%S)}"
@@ -60,7 +60,7 @@ add_env(){ [ -z "${2:-}" ] && return 0; printf '        - name: %s\n          va
 add_env PROJECT "${PROJECT}"
 add_env BUCKET "${BUCKET}"
 add_env CACHE_TAR_URI "${CACHE_TAR_URI}"
-add_env NEIGHBORHOOD_TSV "${NEIGHBORHOOD_TSV}"
+add_env NEIGHBORHOOD_TSV_URI "${NEIGHBORHOOD_TSV_URI}"
 add_env REPO_REF "${REPO_REF}"
 
 case "${STRATEGY}" in

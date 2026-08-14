@@ -12,11 +12,17 @@ PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 CACHE_TAR_URI="${CACHE_TAR_URI:-$BUCKET/esm3_cache.tar}"
 OUT="${OUT:-/workspace/cache_audit}"
-NEIGHBORHOOD_TSV="${NEIGHBORHOOD_TSV:-}"   # optional: check specific ids/stems for presence
+NEIGHBORHOOD_TSV_URI="${NEIGHBORHOOD_TSV_URI:-}"   # optional: a GCS URI, fetched below if set
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 
 mkdir -p "$OUT"
+NEIGHBORHOOD_TSV=""
+if [ -n "$NEIGHBORHOOD_TSV_URI" ]; then
+  NEIGHBORHOOD_TSV="$OUT/neighborhood.tsv"
+  log "fetching $NEIGHBORHOOD_TSV_URI -> $NEIGHBORHOOD_TSV"
+  gcloud storage cp "$NEIGHBORHOOD_TSV_URI" "$NEIGHBORHOOD_TSV"
+fi
 log "fetching $CACHE_TAR_URI -> $OUT/esm3_cache.tar (same-region GCS transfer, not to a local machine)"
 gcloud storage cp "$CACHE_TAR_URI" "$OUT/esm3_cache.tar"
 log "download done, listing tar contents (no extraction)"
