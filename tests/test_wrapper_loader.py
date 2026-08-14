@@ -12,6 +12,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from spa.model import SPACrossAttention, SPAWrappedAttention, attach_spa
+from spa.train.harness import build_optimizer
 
 D, I, N, C_QUERY, C_KV = 2, 9, 6, 768, 1536
 N_BLOCKS = 18
@@ -165,6 +166,67 @@ def test_freeze_host_and_gather_params():
     # SPA trainable and gathered in the adapter (projector has none; prompt_kv + cross_attn do).
     assert all(p.requires_grad for p in adapter.parameters())
     assert sum(p.numel() for p in adapter.parameters()) > 0
+
+
+def _cfg_train(**train_kwargs):
+    """``_cfg()`` plus a ``train`` section, via merge so it works regardless of struct mode."""
+    return OmegaConf.merge(_cfg(), OmegaConf.create({"train": {"lr": 1e-4, "weight_decay": 0.0, **train_kwargs}}))
+
+
+def test_build_optimizer_default_leaves_host_frozen():
+    """``finetune_host_lr`` absent (dev plan/69 §4.2's default, every config before this change):
+    build_optimizer must reproduce the plain single-group construction, host stays exactly as
+    attach_spa left it (frozen) — the regression this whole change must never introduce."""
+    model = FakeRFD3()
+    cfg = _cfg_train()
+    adapter = attach_spa(model, cfg)
+    opt, clip_params = build_optimizer(model, adapter, cfg)
+    assert len(opt.param_groups) == 1
+    assert all(not p.requires_grad for b in model.diffusion_module.diffusion_transformer.blocks
+              for p in b.attention_pair_bias.orig.parameters())
+    assert {id(p) for p in clip_params} == {id(p) for p in adapter.parameters() if p.requires_grad}
+
+
+def test_build_optimizer_unfreezes_host_when_finetune_lr_set():
+    """``finetune_host_lr`` set (dev plan/69 §4.2, Option B): the host's own attention params become
+    trainable, land in a SECOND optimizer param group at the requested LR, and no parameter is
+    double-counted across the two groups (the exact bug the id()-based exclusion in build_optimizer
+    guards against, since SPA's cross-attn modules live nested inside the wrapped host blocks)."""
+    model = FakeRFD3()
+    cfg = _cfg_train(finetune_host_lr=1e-5)
+    adapter = attach_spa(model, cfg)
+    host_param = model.diffusion_module.diffusion_transformer.blocks[0].attention_pair_bias.orig.proj.weight
+    assert not host_param.requires_grad  # frozen by attach_spa, before build_optimizer runs
+
+    opt, clip_params = build_optimizer(model, adapter, cfg)
+
+    assert host_param.requires_grad  # unfrozen by build_optimizer
+    assert len(opt.param_groups) == 2
+    assert opt.param_groups[0]["lr"] == 1e-4
+    assert opt.param_groups[1]["lr"] == 1e-5
+    adapter_ids = {id(p) for p in adapter.parameters() if p.requires_grad}
+    host_group_ids = {id(p) for p in opt.param_groups[1]["params"]}
+    assert adapter_ids.isdisjoint(host_group_ids)          # no param claimed by both groups
+    assert id(host_param) in host_group_ids
+    assert {id(p) for p in clip_params} == adapter_ids | host_group_ids
+
+
+def test_build_optimizer_gradient_reaches_host_when_finetuning():
+    """The actual invariant Option B rests on, checked end-to-end: a real forward+backward through
+    the wrapped fake host must produce a gradient on the host's own (now-unfrozen) parameters, not
+    only on SPA's — the inverse of test_gradient_flows_to_spa_only's real-RFD3 GPU check, runnable
+    here on CPU with the fake host."""
+    model = FakeRFD3()
+    cfg = _cfg_train(finetune_host_lr=1e-5)
+    adapter = attach_spa(model, cfg)
+    build_optimizer(model, adapter, cfg)  # unfreezes the host as a side effect
+
+    host_param = model.diffusion_module.diffusion_transformer.blocks[0].attention_pair_bias.orig.proj.weight
+    out = model.run_blocks(torch.randn(D, I, C_QUERY))
+    out.sum().backward()
+
+    assert host_param.grad is not None
+    assert host_param.grad.abs().sum().item() > 0
 
 
 def test_use_checkpointing_propagates_to_orig():

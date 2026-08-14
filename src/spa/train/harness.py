@@ -88,6 +88,39 @@ def build_scheduler(opt, cfg):
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
+def build_optimizer(net, adapter, cfg):
+    """AdamW over the trainable adapter params (the default, unchanged path), plus a SECOND param
+    group over RFD3's own parameters when ``cfg.train.finetune_host_lr`` is set (dev plan/69 §4.2,
+    Option B fine-tuning upper bound). ``finetune_host_lr`` absent/``null`` (every existing config)
+    reproduces the prior single-group construction exactly — this is the only new code path a run
+    without the key ever executes.
+
+    When set, unfreezes ``net`` (it arrives frozen from :func:`attach_spa`) and gathers its
+    parameters MINUS whatever the adapter already claims: the SPA cross-attention modules live
+    nested inside ``net``'s wrapped blocks (:class:`~spa.model.wrapper.SPAWrappedAttention` holds
+    both the frozen original attention and the SPA submodule as children), so a naive
+    ``net.parameters()`` would double-count them across the two optimizer groups and update them
+    twice per step at two different LRs — a real bug, not a style choice, which is why the exclusion
+    is by parameter identity (``id()``) rather than by module type.
+
+    Returns ``(opt, clip_params)`` — ``clip_params`` is every tensor actually being optimized (so a
+    caller clips grad norm over the same set the optimizer steps, not just the adapter's)."""
+    trainable = [p for p in adapter.parameters() if p.requires_grad]
+    host_lr = cfg.train.get("finetune_host_lr", None)
+    if host_lr is None:
+        opt = torch.optim.AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+        return opt, trainable
+    net.requires_grad_(True)
+    adapter_param_ids = {id(p) for p in adapter.parameters()}
+    host_params = [p for p in net.parameters() if id(p) not in adapter_param_ids]
+    opt = torch.optim.AdamW(
+        [{"params": trainable, "lr": cfg.train.lr},
+         {"params": host_params, "lr": float(host_lr)}],
+        weight_decay=cfg.train.weight_decay,
+    )
+    return opt, trainable + host_params
+
+
 def _wo_norm(adapter) -> float:
     """Mean Frobenius norm of the per-block zero-init output projections ``Wo`` — a proxy for how far
     SPA has grown from identity-at-init (dev ``03`` §8); 0 at init, logged to W&B over training."""
@@ -244,10 +277,15 @@ def gather_provenance(cfg) -> dict:
     return prov
 
 
-def save_checkpoint(path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance) -> None:
+def save_checkpoint(path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance, net=None) -> None:
     """Atomic full-state checkpoint for resume: adapter + optimizer + scheduler + step + sample
     counter + RNG (torch / cuda / sampling generator) + provenance (dev ``04`` §8). Written via a
-    ``.tmp`` rename so a crash mid-write never corrupts the rolling ``last.pt``."""
+    ``.tmp`` rename so a crash mid-write never corrupts the rolling ``last.pt``.
+
+    ``net``: pass the RFD3 host **only** when it is being fine-tuned (``cfg.train.finetune_host_lr``
+    set, dev plan/69 §4.2) — its full ``state_dict`` is added under ``"host"``. Omitted (default) for
+    ordinary SPA-only training, where the host never changes and re-saving 168M frozen params every
+    checkpoint would be pure waste."""
     import os
 
     ckpt = {
@@ -264,19 +302,27 @@ def save_checkpoint(path, adapter, opt, sched, step, samples_seen, gen, cfg, pro
         "provenance": provenance,
         "variant": cfg.variant.name,
     }
+    if net is not None:
+        ckpt["host"] = net.state_dict()
     tmp = f"{path}.tmp"
     torch.save(ckpt, tmp)
     os.replace(tmp, path)  # atomic on POSIX
 
 
-def load_checkpoint(path, adapter, opt, sched, gen, device):
+def load_checkpoint(path, adapter, opt, sched, gen, device, net=None):
     """Restore a :func:`save_checkpoint` into the live adapter / opt / sched / gen + RNG. Returns
     ``(step, samples_seen)`` of the LAST completed optimizer step — the caller resumes at ``step+1``.
 
     Loads to CPU first (RNG byte-tensors must stay on CPU), then moves the Adam moments onto the
-    param device so a resumed ``opt.step`` doesn't hit a device mismatch."""
+    param device so a resumed ``opt.step`` doesn't hit a device mismatch.
+
+    ``net``: pass the RFD3 host to also restore its fine-tuned weights from a ``"host"`` key
+    (dev plan/69 §4.2). A checkpoint written before host fine-tuning was enabled has no such key;
+    silently skipped rather than raising, so resuming an ordinary SPA-only run is unaffected."""
     ck = torch.load(path, map_location="cpu", weights_only=False)
     adapter.load_state_dict(ck["adapter"])  # adapter params stay on their device (cross-device copy)
+    if net is not None and ck.get("host") is not None:
+        net.load_state_dict(ck["host"])
     opt.load_state_dict(ck["optimizer"])
     for st in opt.state.values():
         for k, v in st.items():
@@ -409,10 +455,13 @@ def train(cfg) -> None:
     adapter = attach_spa(net, cfg).to(device)
     set_host_train_mode(net)
     loss_fn = build_loss(cfg).to(device)
-    # train only requires_grad params — a variant may include a FROZEN encoder in the adapter
-    # (e.g. variant-A's CLSS structure_adapter), which must stay out of the optimizer.
-    trainable = [p for p in adapter.parameters() if p.requires_grad]
-    opt = torch.optim.AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+    # build_optimizer trains only requires_grad adapter params by default — a variant may include a
+    # FROZEN encoder in the adapter (e.g. variant-A's CLSS structure_adapter), which must stay out of
+    # the optimizer — and additionally unfreezes + optimizes RFD3's own params when
+    # cfg.train.finetune_host_lr is set (dev plan/69 §4.2, Option B). finetuning_host gates every
+    # host-checkpointing call below; absent/null (every existing config) leaves them all off.
+    finetuning_host = cfg.train.get("finetune_host_lr", None) is not None
+    opt, clip_params = build_optimizer(net, adapter, cfg)
     sched = build_scheduler(opt, cfg)
     gen = torch.Generator().manual_seed(cfg.train.seed)
     stream = _example_stream(cfg, engine, net, device)
@@ -424,7 +473,9 @@ def train(cfg) -> None:
     samples_seen, start_step = 0, 0
     last_path = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_last.pt")
     if str(cfg.train.get("resume", "auto")).lower() in ("auto", "true", "1") and os.path.exists(last_path):
-        start_step, samples_seen = load_checkpoint(last_path, adapter, opt, sched, gen, device)
+        start_step, samples_seen = load_checkpoint(
+            last_path, adapter, opt, sched, gen, device, net=(net if finetuning_host else None)
+        )
         start_step += 1  # the saved step is the last COMPLETED one; resume on the next
         print(f"resumed from {last_path}: continuing at optimizer step {start_step} "
               f"(samples_seen={samples_seen})")
@@ -468,7 +519,10 @@ def train(cfg) -> None:
         lr_now = sched.get_last_lr()[0]  # the LR actually applied at this step (before advancing)
         gnorm = 0.0
         if n_back > 0:
-            gnorm = float(torch.nn.utils.clip_grad_norm_(adapter.parameters(), cfg.train.grad_clip))
+            # clip over clip_params, not adapter.parameters(): when finetuning_host, that's adapter
+            # PLUS the unfrozen RFD3 params build_optimizer added to opt's second group, and clipping
+            # only the adapter's half would leave the host's gradients ungated (dev plan/69 §4.2).
+            gnorm = float(torch.nn.utils.clip_grad_norm_(clip_params, cfg.train.grad_clip))
             opt.step()
         sched.step()
         samples_seen += grad_accum
@@ -479,9 +533,10 @@ def train(cfg) -> None:
             tracker.log({"train/loss": avg, "lr": lr_now, "grad_norm": gnorm,
                          "spa/Wo_norm": _wo_norm(adapter), "samples_seen": samples_seen}, step=step)
         if ckpt_every and (step + 1) % ckpt_every == 0:
-            save_checkpoint(last_path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
+            host_arg = net if finetuning_host else None
+            save_checkpoint(last_path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance, net=host_arg)
             snap = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_step{step + 1}.pt")
-            save_checkpoint(snap, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
+            save_checkpoint(snap, adapter, opt, sched, step, samples_seen, gen, cfg, provenance, net=host_arg)
             print(f"  checkpoint @ step {step + 1} -> last.pt + {os.path.basename(snap)}")
         if do_val and (step + 1) % val_every == 0:
             vloss = validate(cfg, net, adapter, loss_fn, device, int(cfg.train.get("val_batches", 8)))
@@ -492,9 +547,20 @@ def train(cfg) -> None:
             print(f"time budget {max_hours}h reached at optimizer step {step}")
             break
 
-    save_checkpoint(last_path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance)
+    save_checkpoint(last_path, adapter, opt, sched, step, samples_seen, gen, cfg, provenance,
+                    net=(net if finetuning_host else None))
     export = os.path.join(cfg.train.ckpt_dir, f"spa_{cfg.variant.name}_final.pt")
     save_spa(adapter, export)  # adapter-only export for inference/validation (no optimizer state)
+    host_export = None
+    if finetuning_host:
+        # Separate export, deliberately not folded into `export`: eval code loading a plain SPA
+        # export (save_spa's format) must keep working unchanged, and a fine-tuned host is a second,
+        # independent artifact (dev plan/69 §4.2's whole point is comparing SPA-frozen-host against
+        # this) rather than a variant of the same one.
+        host_export = os.path.join(cfg.train.ckpt_dir, f"rfd3_{cfg.variant.name}_finetuned.pt")
+        torch.save(net.state_dict(), host_export)
     print(f"done at optimizer step {step} | resume={os.path.basename(last_path)} "
-          f"export={os.path.basename(export)} | samples_seen={samples_seen}")
+          f"export={os.path.basename(export)}"
+          f"{' host_export=' + os.path.basename(host_export) if host_export else ''} "
+          f"| samples_seen={samples_seen}")
     tracker.finish()
