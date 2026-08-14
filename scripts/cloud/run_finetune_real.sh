@@ -41,10 +41,18 @@ pip install -e "$SPA_REPO" --no-deps -q
 
 # --- Fetch the neighborhood: 50 PDBs + the custom train/manifest.parquet (dev plan/69 SS4.11/4.12) ---
 STAGE="$OUT/neighborhood"
-mkdir -p "$STAGE/pdb" "$STAGE/splits/train" "$OUT"
+mkdir -p "$STAGE/pdb" "$STAGE/splits/train" "$STAGE/splits/validate" "$OUT"
 log "fetching neighborhood: $NEIGHBORHOOD_URI -> $STAGE"
 gcloud storage rsync -r "$NEIGHBORHOOD_URI/pdb" "$STAGE/pdb"
 gcloud storage cp "$NEIGHBORHOOD_URI/train/manifest.parquet" "$STAGE/splits/train/manifest.parquet"
+# harness.py's train() runs one post-training validate() call unconditionally (harness.py:542),
+# which needs a validate/manifest.parquet under splits_root with no live-encode fallback
+# (CDDBPromptDataset). Reuse the same 50-structure manifest as the validate split too -- val-loss is
+# not the checkpoint selector for this project (docs/results/00 SS5), so overlap with train is fine
+# for this sanity-check dependency. A first real-run attempt (2026-08-14) staged only a train/ split
+# and crashed with FileNotFoundError right after training completed (all 1000 steps had already run
+# and checkpointed successfully; only the post-training validate() call failed).
+cp "$STAGE/splits/train/manifest.parquet" "$STAGE/splits/validate/manifest.parquet"
 N_PDB=$(ls "$STAGE/pdb" | wc -l)
 log "  $N_PDB PDBs staged"
 
