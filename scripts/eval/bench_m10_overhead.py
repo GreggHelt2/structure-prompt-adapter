@@ -347,7 +347,7 @@ import torch
 t_torch = time.time()
 from spa.prompt.esm3_prompt import esm3_prompt, load_esm3
 t_import = time.time()
-model = load_esm3("cuda" if torch.cuda.is_available() else "cpu")
+model = load_esm3(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 t_loaded = time.time()
 p = esm3_prompt({a.prompt_pdb!r}, model, strip_bos_eos=True)
 t_encoded = time.time()
@@ -414,7 +414,13 @@ def main():
     if a.smoke:
         a.k = 1
         a.lengths = a.lengths.split(",")[0]
-        print(f"[m10] SMOKE MODE: K=1, length={a.lengths} only, arms + load-breakdown only")
+        if a.residency_prompts:
+            # trim to 2 prompts: enough to exercise the warm-process code path (build_eval_engine /
+            # load_adapter / generate(engine=,adapter=), never run before this) without paying for
+            # all 6 staged prompts at smoke scale.
+            a.residency_prompts = ",".join(a.residency_prompts.split(",")[:2])
+        print(f"[m10] SMOKE MODE: K=1, length={a.lengths} only, "
+              f"arms + load-breakdown + residency (2 prompts) only")
 
     Path(a.out_dir).mkdir(parents=True, exist_ok=True)
     print(f"[m10] out_dir={a.out_dir}  phase={a.phase}  ckpt={a.ckpt}  gpu={a.gpu or '(default)'}")
@@ -422,7 +428,11 @@ def main():
     results = {}
     phases = ["arms", "k-sweep", "m-sweep", "residency", "load-breakdown"] if a.phase == "all" else [a.phase]
     if a.smoke:
-        phases = [p for p in phases if p in ("arms", "load-breakdown")]
+        # k-sweep/m-sweep reuse the SAME _run_generate/_base_overrides path the arms phase already
+        # validated (just different loop parameters); residency's warm-process arm does NOT (direct
+        # Hydra compose + engine reuse, never exercised), so it belongs in smoke validation and
+        # k-sweep/m-sweep do not need to be.
+        phases = [p for p in phases if p in ("arms", "load-breakdown", "residency")]
 
     for p in phases:
         print(f"\n=== phase: {p} ===")
