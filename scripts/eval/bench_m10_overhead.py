@@ -102,8 +102,8 @@ class _GpuPoller(threading.Thread):
 # in the cloud combined image (SPA/RFD3 on system python, no conda prefix -- verified against
 # scripts/cloud/run_smoke.sh, which never prefixes `conda run -n spa-dev`).
 # --------------------------------------------------------------------------------------------------
-def _run_generate(overrides: list[str], *, gpu=None, timeout=900) -> dict:
-    cmd = [sys.executable, str(_REPO / "scripts" / "eval" / "generate.py")] + overrides
+def _run_generate(overrides: list[str], *, gpu=None, timeout=900, script="generate.py") -> dict:
+    cmd = [sys.executable, str(_REPO / "scripts" / "eval" / script)] + overrides
     poller = _GpuPoller(gpu=gpu)
     poller.start()
     t0 = time.time()
@@ -167,6 +167,18 @@ def phase_arms(a) -> list[dict]:
     for sampler_name, sampler_kw in _SAMPLERS.items():
         for length in lengths:
             out = f"{a.out_dir}/arms/s{sampler_name}_L{length}"
+            # host-only: SPA never attached at all (generate_rfd3_only.py never imports spa.model),
+            # the TRUE zero-overhead floor -- distinct from "inert" below, which has the wrapper
+            # attached but silent. Added 2026-08-18: this row was in plan/73 SS2 from the first
+            # draft of the spec and should have been built from the start; it was not, and this is
+            # the fix, not a new idea.
+            r = _run_generate(_base_overrides(
+                variant=a.variant, hardware=a.hardware, rfd3_ckpt=a.rfd3_ckpt, out_dir=f"{out}/host_only",
+                num_designs=a.k, length=length, **sampler_kw), gpu=a.gpu, script="generate_rfd3_only.py")
+            rows.append({"arm": "host_only", "sampler": sampler_name, "length": length, **r})
+            print(f"[m10:arms] host_only s={sampler_name} L={length}  {r['seconds']:>7.1f}s  "
+                  f"peak {r['peak_vram_mib']:>6} MiB  ok={r['ok']}")
+
             # inert: wrapper attached (adapter present via --ckpt if given, but no prompt -> baseline
             # condition == clear_prompt, an identity gate; isolates the architectural tax alone)
             r = _run_generate(_base_overrides(
