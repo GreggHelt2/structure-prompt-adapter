@@ -15,12 +15,20 @@ source, not assumed):
 - **Cold** (`eval.prompt_pdb`, ESM3 loaded fresh every process) vs. **cached** (`eval.prompt_cache`,
   ESM3 skipped entirely) prompt resolution.
 - **Two amortization levels**: designs sharing one process (`--phase k-sweep`) vs. separate process
-  launches for the SAME prompt (`--phase m-sweep`) vs. separate launches for DIFFERENT prompts,
-  with and without keeping the RFD3 engine warm across them (`--phase residency`) — the last of
-  these is the one arm this project's own sweep drivers do NOT already do (verified against
-  `scripts/eval/ladder_sweep.py`, which keeps the engine warm only for swapping SPA *checkpoints* on
-  one fixed prompt, and `scripts/cloud/run_threeway_sweep.sh`, whose bash `for`-loop launches a
-  fresh subprocess per cell).
+  launches for the SAME prompt (`--phase m-sweep`).
+- **Four residency strategies for DIFFERENT prompts** (`--phase residency`), none of which this
+  project's own sweep drivers already cover (verified against `scripts/eval/ladder_sweep.py`, which
+  keeps the engine warm only for swapping SPA *checkpoints* on one fixed prompt, and
+  `scripts/cloud/run_threeway_sweep.sh`, whose bash `for`-loop launches a fresh subprocess per
+  cell): (a) fully separate subprocess launches (each pays a fresh RFD3 load; ESM3 held constant via
+  a pre-staged cache); (b) one warm process, RFD3+SPA stay resident, looping the SAME pre-staged
+  caches; (c) **ESM3 also stays resident** alongside RFD3+SPA, the opposite of `resolve_prompt()`'s
+  own default (it deliberately frees ESM3 "so it does not co-reside with RFD3 during the sampler",
+  `generate.py`:223-225) — added 2026-08-18 to test whether that caution, plausibly tuned for the
+  24GB local A5000, still matters on an 80GB H100; (d) **precompute all M prompts with ESM3 first,
+  free it completely, then build RFD3 fresh** (the `precompute_prompts.py` pattern, but timed
+  end-to-end including the encode step, not assumed to happen outside the clock) — added the same
+  day, the opposite extreme from (c).
 - **Both sampler settings** (checkpoint-inherited 100-step/gamma0=0.8 vs RFD3's published
   200-step/gamma0=0.6), to see whether the overhead *fraction* changes with step count.
 
@@ -269,10 +277,24 @@ def phase_residency(a) -> dict:
     # SAME M prompts via their precomputed caches (the ladder_sweep.py idiom, generalized).
     warm_result = _run_warm_residency(a, pairs, length)
 
+    # (c) ESM3 ALSO stays resident (never freed), alongside the warm RFD3 engine, starting from RAW
+    # pdbs (not pre-staged caches) -- added 2026-08-18 at Gregg's request, to test the design choice
+    # resolve_prompt() deliberately does NOT take (it frees ESM3 after every encode "so it does not
+    # co-reside with RFD3 during the sampler", generate.py:223-225): does that VRAM caution actually
+    # matter on an 80GB H100, or is it a leftover A5000 (24GB) constraint applied everywhere?
+    esm3_resident_result = _run_esm3_resident_residency(a, pairs, length)
+
+    # (d) precompute ALL prompts with ESM3 first (one load, M encodes), free ESM3+VRAM completely,
+    # THEN build RFD3 fresh and generate -- the precompute_prompts.py pattern, but timed end-to-end
+    # (including the encode step) rather than assuming it happened outside the clock.
+    precompute_result = _run_precompute_then_free_residency(a, pairs, length)
+
     return {
         "separate": {"m": len(pairs), "total_seconds": round(sep_total, 2),
                      "seconds_per_prompt": round(sep_total / len(pairs), 2), "peak_vram_mib": sep_peak},
         "warm_process": warm_result,
+        "esm3_resident": esm3_resident_result,
+        "precompute_then_free": precompute_result,
     }
 
 
@@ -328,6 +350,160 @@ def _run_warm_residency(a, pairs, length) -> dict:
           f"total {total:>7.1f}s  peak {peak_mib:>6} MiB (torch, in-process)")
     return {"engine_build_seconds": round(t_engine, 2), "per_prompt_seconds": per_prompt,
             "total_seconds": round(total, 2), "peak_vram_mib_torch": peak_mib}
+
+
+def _compose_residency_cfg(a, length):
+    """Shared by the two new residency arms: same overrides `_run_warm_residency` composes."""
+    from hydra import compose, initialize_config_dir
+    from omegaconf import OmegaConf
+
+    overrides = [
+        f"variant={a.variant}", f"hardware={a.hardware}", f"eval.ckpt={a.ckpt}",
+        f"eval.length={length}", f"eval.num_designs=1", f"eval.conditions=[spa]",
+        f"eval.lambda_scale={a.lam}",
+        f"eval.num_timesteps={_SAMPLERS['100']['num_timesteps']}",
+        f"eval.gamma_0={_SAMPLERS['100']['gamma_0']}",
+    ]
+    if a.rfd3_ckpt:
+        overrides.append(f"paths.rfd3_ckpt={a.rfd3_ckpt}")
+    config_dir = str(_REPO / "configs")
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        cfg = compose(config_name="eval", overrides=overrides)
+    OmegaConf.set_struct(cfg, False)
+    return cfg
+
+
+def _run_esm3_resident_residency(a, pairs, length) -> dict:
+    """Arm (c), added 2026-08-18 at Gregg's request: does NOT free ESM3 between (or during) calls --
+    the opposite of resolve_prompt()'s own default behaviour (generate.py:223-225, "so it does not
+    co-reside with RFD3 during the sampler"). ESM3 + the RFD3 engine + SPA adapter are ALL built
+    once and stay resident in VRAM for the whole loop, encoding each of the M RAW prompt pdbs
+    on-demand via the SAME already-loaded ESM3 instance. Reports peak VRAM directly, since the
+    question this answers is empirical ("is this fine on the 80GB H100?"), not asserted."""
+    import time as _time
+
+    import torch
+
+    from spa.eval.generate import build_eval_engine, generate, load_adapter
+    from spa.prompt.esm3_prompt import esm3_prompt, load_esm3
+    from spa.train.harness import frozen_rfd3_net
+    from spa.utils.device import resolve_device
+
+    cfg = _compose_residency_cfg(a, length)
+    device = resolve_device(cfg.hardware.device)
+
+    t0 = _time.time()
+    engine = build_eval_engine(cfg)
+    net = frozen_rfd3_net(engine)
+    adapter = load_adapter(net, cfg, device)
+    adapter.eval()
+    esm3_model = load_esm3(device)          # loaded ONCE; deliberately never freed/deleted below
+    t_setup = _time.time() - t0
+
+    tmp_dir = Path(f"{a.out_dir}/residency/esm3_resident_tmp")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    encode_times, generate_times = [], []
+    for i, (pdb, _cache) in enumerate(pairs):
+        t_e0 = _time.time()
+        p = esm3_prompt(pdb, esm3_model, strip_bos_eos=True).detach().cpu()
+        encode_times.append(round(_time.time() - t_e0, 2))
+        cache_path = tmp_dir / f"{i}.pt"
+        torch.save(p, cache_path)
+        cfg.eval.prompt_cache = str(cache_path)
+        cfg.eval.prompt_pdb = None
+        cfg.eval.out_dir = f"{a.out_dir}/residency/esm3_resident/{i}"
+        t_g0 = _time.time()
+        designs = generate(cfg, engine=engine, adapter=adapter)
+        generate_times.append(round(_time.time() - t_g0, 2))
+        print(f"[m10:residency] esm3-resident[{i}]  encode {encode_times[-1]:>5.2f}s  "
+              f"generate {generate_times[-1]:>6.2f}s  n_designs={len(designs)}")
+
+    peak_mib = int(torch.cuda.max_memory_allocated() / (1024 * 1024)) if torch.cuda.is_available() else 0
+    total = t_setup + sum(encode_times) + sum(generate_times)
+    print(f"[m10:residency] esm3-resident  setup(engine+adapter+ESM3) {t_setup:>7.1f}s  "
+          f"+ {len(pairs)} prompts avg encode {sum(encode_times)/len(encode_times):>5.2f}s "
+          f"generate {sum(generate_times)/len(generate_times):>6.2f}s  "
+          f"total {total:>7.1f}s  peak {peak_mib:>6} MiB (ESM3+RFD3+SPA co-resident throughout)")
+    return {"setup_seconds": round(t_setup, 2), "encode_seconds": encode_times,
+            "generate_seconds": generate_times, "total_seconds": round(total, 2),
+            "peak_vram_mib_torch": peak_mib}
+
+
+def _run_precompute_then_free_residency(a, pairs, length) -> dict:
+    """Arm (d), added 2026-08-18 at Gregg's request: the precompute_prompts.py pattern, timed
+    end-to-end. Phase A loads ESM3 ONCE, encodes ALL M raw prompt pdbs, then explicitly frees ESM3
+    (del + empty_cache) before RFD3 is even built -- so ESM3 and RFD3 never co-reside in VRAM at
+    all, the opposite extreme from the esm3_resident arm above. Phase B builds RFD3 fresh and
+    generates from the M now-cached tensors, engine warm across all of them (matching the
+    warm_process arm's RFD3-residency assumption, so the only new variable vs that arm is whether
+    the encode cost was paid inside this same timed measurement)."""
+    import time as _time
+
+    import torch
+
+    from spa.eval.generate import build_eval_engine, generate, load_adapter
+    from spa.prompt.esm3_prompt import esm3_prompt, load_esm3
+    from spa.train.harness import frozen_rfd3_net
+    from spa.utils.device import resolve_device
+
+    cfg = _compose_residency_cfg(a, length)
+    device = resolve_device(cfg.hardware.device)
+    tmp_dir = Path(f"{a.out_dir}/residency/precompute_tmp")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Phase A: ESM3 only, all M prompts, then freed ---
+    t_a0 = _time.time()
+    esm3_model = load_esm3(device)
+    vram_after_esm3_load = (int(torch.cuda.max_memory_allocated() / (1024 * 1024))
+                            if torch.cuda.is_available() else 0)
+    cache_paths = []
+    encode_times = []
+    for i, (pdb, _cache) in enumerate(pairs):
+        t_e0 = _time.time()
+        p = esm3_prompt(pdb, esm3_model, strip_bos_eos=True).detach().cpu()
+        encode_times.append(round(_time.time() - t_e0, 2))
+        cache_path = tmp_dir / f"{i}.pt"
+        torch.save(p, cache_path)
+        cache_paths.append(cache_path)
+        print(f"[m10:residency] precompute[{i}]  encode {encode_times[-1]:>5.2f}s")
+    del esm3_model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+    phase_a_total = _time.time() - t_a0
+    print(f"[m10:residency] precompute Phase A (ESM3, {len(pairs)} prompts, then FREED): "
+          f"{phase_a_total:>7.1f}s  peak-during {vram_after_esm3_load:>6} MiB")
+
+    # --- Phase B: RFD3 fresh (built AFTER ESM3 is freed), warm across all M cached prompts ---
+    t_b0 = _time.time()
+    engine = build_eval_engine(cfg)
+    net = frozen_rfd3_net(engine)
+    adapter = load_adapter(net, cfg, device)
+    adapter.eval()
+    t_engine = _time.time() - t_b0
+
+    generate_times = []
+    for i, cache_path in enumerate(cache_paths):
+        cfg.eval.prompt_cache = str(cache_path)
+        cfg.eval.prompt_pdb = None
+        cfg.eval.out_dir = f"{a.out_dir}/residency/precompute/{i}"
+        t_g0 = _time.time()
+        designs = generate(cfg, engine=engine, adapter=adapter)
+        generate_times.append(round(_time.time() - t_g0, 2))
+        print(f"[m10:residency] precompute generate[{i}]  {generate_times[-1]:>6.2f}s  n_designs={len(designs)}")
+
+    peak_mib_b = int(torch.cuda.max_memory_allocated() / (1024 * 1024)) if torch.cuda.is_available() else 0
+    phase_b_total = t_engine + sum(generate_times)
+    total = phase_a_total + phase_b_total
+    print(f"[m10:residency] precompute Phase B (RFD3 fresh + {len(pairs)} prompts warm): "
+          f"engine-build {t_engine:>7.1f}s  avg generate {sum(generate_times)/len(generate_times):>6.2f}s  "
+          f"total {phase_b_total:>7.1f}s  peak {peak_mib_b:>6} MiB")
+    print(f"[m10:residency] precompute COMBINED total {total:>7.1f}s")
+    return {"phase_a_esm3_seconds": round(phase_a_total, 2), "phase_a_encode_seconds": encode_times,
+            "phase_a_vram_mib_torch": vram_after_esm3_load,
+            "phase_b_engine_build_seconds": round(t_engine, 2), "phase_b_generate_seconds": generate_times,
+            "phase_b_vram_mib_torch": peak_mib_b, "total_seconds": round(total, 2)}
 
 
 # --------------------------------------------------------------------------------------------------
