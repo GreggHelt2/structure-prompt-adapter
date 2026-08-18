@@ -3,8 +3,13 @@
 WHY THIS EXISTS, AND WHY IT IS NOT A NEW GENERATION PATH
 ``generate.py`` resolves a prompt from either ``eval.prompt_pdb`` (loads ESM3, encodes, frees it) or
 ``eval.prompt_cache`` (``torch.load`` of a ``[N, c_kv]`` tensor). A driver that invokes ``generate.py``
-once per prompt therefore pays the ~90 s ESM3 load once per prompt: for dev ``plan/62``'s 60-prompt
-Phase B' that is ~90 minutes of pure model loading against ~68 minutes of actual compute.
+once per prompt therefore pays an ESM3 load once per prompt: measured directly (dev ``results/34``,
+H100, two independent runs) at ~6.8-7.2 s per load, dominated by ``ESM3.from_pretrained`` itself
+(~4.4 s), not the encode. (An earlier version of this docstring cited "~90 s" and derived "~90
+minutes for 60 prompts" from it; that figure was never independently measured and was wrong by
+roughly 13x -- corrected here once a real number existed. At the measured rate, 60 prompts costs
+~7 minutes of pure model loading, not 90.) The fix below is still worth having regardless of the
+exact number: repeated loads are still 100% avoidable overhead at any scale.
 
 The obvious fix, a bespoke driver that loads ESM3 once and loops, is the **wrong** fix when the run's
 purpose is comparability with an earlier result, because it introduces a second generation path that
