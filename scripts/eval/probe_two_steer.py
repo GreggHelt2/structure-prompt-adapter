@@ -223,12 +223,18 @@ def run_two_steer(args):
         contig, M_idx, R1_idx, R2_idx, L = _spacered_partition(args.motif_seg, r1_len, r2_len, sp_in, sp_tm)
     else:
         contig, order = build_contig(args.motif_seg, r1_len, r2_len, "BAC")  # B=R1, A=M, C=R2
+    # ONE sampler configuration for the whole run, all three knobs together. Selecting an arm
+    # rather than a bare step count is what stops a 200-step run silently keeping the
+    # checkpoint's gamma_0=0.8 (dev docs/plan/81 §7; spa.eval.sampler_arms).
+    from spa.eval.sampler_arms import resolve_with_legacy
+    _sampler = resolve_with_legacy(getattr(args, "sampler_arm", None), args.num_timesteps)
+    print(f"[sampler] arm={getattr(args, 'sampler_arm', None)} -> {_sampler}")
     cfg = OmegaConf.create({
         "paths": {"rfd3_ckpt": _rfd3_ckpt(getattr(args, "rfd3_ckpt", None))},
         "hardware": {"device": device},
         "model": base_model, "variant": base_variant,
         "eval": {"num_designs": K, "length": None, "specification": None,
-                 "num_timesteps": args.num_timesteps, "seed": int(args.seed), "ckpt": args.ckpt,
+                 **_sampler, "seed": int(args.seed), "ckpt": args.ckpt,
                  "out_dir": str(out_dir), "motif": {"source_pdb": motif_pdb, "contig": contig}},
     })
     if sp_in or sp_tm:
@@ -357,7 +363,10 @@ def main():
                     help="comma list of R1:R2 target pairs; each side ∈ {free,g1,g2}. free:free is forced first.")
     ap.add_argument("--num-designs", type=int, default=8, help="K designs (paired noise)")
     ap.add_argument("--seed", type=int, default=17)
-    ap.add_argument("--num-timesteps", type=int, default=None, help="sampler steps (None → rfd3 edm.yaml 100)")
+    ap.add_argument("--num-timesteps", type=int, default=None,
+                    help="DEPRECATED, use --sampler-arm. Kept so recorded invocations still run; it is "
+                         "rejected if it disagrees with the selected arm (spa.eval.sampler_arms).")
+    from spa.eval.sampler_arms import add_arm_argument as _add_arm; _add_arm(ap)
     ap.add_argument("--pdb-dir", default=DEFAULT_PDB_DIR)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "twosteer"))

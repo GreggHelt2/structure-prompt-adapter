@@ -14,7 +14,12 @@ RFD3_CKPT_URI="${RFD3_CKPT_URI:-$BUCKET/weights/rfd3_latest.ckpt}"
 OF3_CKPT_URI="${OF3_CKPT_URI:-$BUCKET/weights/of3-p2-155k.pt}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 MPNN_REPO="${MPNN_REPO:-/opt/ProteinMPNN}"
-NUM_TIMESTEPS="${NUM_TIMESTEPS:-}"   # empty -> effective RFD3 default 100 (rfd3 edm.yaml; NOT the 200 its docs claim; see dev 07 I.10). set to 200 to match the paper's benchmark.
+# RFD3 sampler configuration. ARM=ours (default) = the released checkpoint's 100 / gamma_0 0.8;
+# ARM=rfd3 = the RFdiffusion3 paper's 200 / 0.6. This REPLACES the old NUM_TIMESTEPS env var, which
+# could set the step count while leaving gamma_0 at the checkpoint's 0.8, i.e. a configuration
+# matching neither the paper nor the checkpoint (dev docs/plan/81 §7).
+ARM="${ARM:-ours}"
+. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
 PREP=/workspace/prep
 OUT=/workspace/b1_out
 
@@ -48,14 +53,13 @@ gcloud storage cp "$BUCKET/checkpoints/$SPA_CKPT_REL" /workspace/weights/spa.pt
 [ -n "${K_OVERRIDE:-}" ] && K="$K_OVERRIDE"
 [ -n "${NSEQ_OVERRIDE:-}" ] && NSEQ="$NSEQ_OVERRIDE"
 export SUBSET_IDS="${SUBSET_IDS:-}"   # comma list -> run only these prompts (validation pass); empty = all 25 (exported for the inline python)
-log "config: spa_ckpt=$SPA_CKPT_REL  lambda=$LAM  K=$K  N=$NSEQ  timesteps=${NUM_TIMESTEPS:-default}  subset=${SUBSET_IDS:-ALL}"
+log "config: spa_ckpt=$SPA_CKPT_REL  lambda=$LAM  K=$K  N=$NSEQ  sampler_arm=$ARM  subset=${SUBSET_IDS:-ALL}"
 
 # --- Per-prompt loop (id<TAB>contig; TAB-delimited so the comma-bearing contig stays one field) ---
 python -c "import json,os
 sub=set(x for x in os.environ.get('SUBSET_IDS','').split(',') if x)
 for p in json.load(open('$MAN'))['prompts']:
     if not sub or p['id'] in sub: print(p['id']+chr(9)+p['contig'])" > "$OUT/prompts.tsv"
-TS_ARG=""; [ -n "$NUM_TIMESTEPS" ] && TS_ARG="eval.num_timesteps=$NUM_TIMESTEPS"
 n=0; ok=0
 while IFS=$'\t' read -r id contig; do
   n=$((n+1))
@@ -65,7 +69,8 @@ while IFS=$'\t' read -r id contig; do
   python "$SPA_REPO/scripts/eval/run_flywheel.py" \
     variant=C_n_by_1536 hardware=cloud_h100 \
     'eval.conditions=[baseline,spa]' "eval.lambda_scale=[$LAM]" \
-    eval.num_designs="$K" eval.proteinmpnn.num_seqs="$NSEQ" $TS_ARG \
+    eval.num_designs="$K" eval.proteinmpnn.num_seqs="$NSEQ" \
+    "${SAMPLER_ARGS[@]}" \
     eval.ckpt=/workspace/weights/spa.pt \
     eval.prompt_cache="$PREP/$id.pt" \
     +eval.motif.source_pdb="$PREP/$id.pdb" \

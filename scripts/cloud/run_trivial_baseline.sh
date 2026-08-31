@@ -48,6 +48,12 @@ gcloud storage cp "$RFD3_CKPT_URI" /workspace/weights/rfd3_latest.ckpt
 gcloud storage cp "$OF3_CKPT_URI"  /workspace/weights/of3-p2-155k.pt
 gcloud storage cp "$SOURCE_PDB_URI" /workspace/target.pdb
 
+# RFD3 sampler configuration; see scripts/_sampler_arm.sh. ARM=ours (default) is the released
+# checkpoint's 100 / gamma_0 0.8, ARM=rfd3 is the RFdiffusion3 paper's 200 / 0.6. Always all three
+# knobs together: a partial setting matches neither published configuration.
+ARM="${ARM:-ours}"
+. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
+
 log "config: source_pdb=$SOURCE_PDB_URI contig=$CONTIG K=$K N=$NSEQ seed=$SEED"
 
 # --- The whole-structure-as-motif run: baseline only, no SPA checkpoint loaded or referenced. ---
@@ -55,6 +61,7 @@ python "$SPA_REPO/scripts/eval/run_flywheel.py" \
   variant=C_n_by_1536 hardware=cloud_h100 \
   'eval.conditions=[baseline]' \
   eval.num_designs="$K" eval.proteinmpnn.num_seqs="$NSEQ" eval.proteinmpnn.seed="$SEED" eval.seed="$SEED" \
+  "${SAMPLER_ARGS[@]}" \
   +eval.motif.source_pdb=/workspace/target.pdb \
   "+eval.motif.contig='$CONTIG'" \
   +eval.motif.fixed_atoms=true \

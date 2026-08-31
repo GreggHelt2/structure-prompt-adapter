@@ -48,6 +48,12 @@ for p in json.load(open('$MAN'))['prompts']:
     if p['band']==b: print(p['id']+chr(9)+str(p['len']))" > "$OUT/prompts.tsv"
 NP=$(wc -l < "$OUT/prompts.tsv")
 NV=$(echo "$VARIANTS" | wc -w)
+# RFD3 sampler configuration; see scripts/_sampler_arm.sh. ARM=ours (default) is the released
+# checkpoint's 100 / gamma_0 0.8, ARM=rfd3 is the RFdiffusion3 paper's 200 / 0.6. Always all three
+# knobs together: a partial setting matches neither published configuration.
+ARM="${ARM:-ours}"
+. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
+
 log "variant SOFT-designability: ${NV} variants × ${NP} prompts (band=$BAND), K=$K N=$NSEQ λ=$LAM"
 
 for entry in $VARIANTS; do
@@ -62,6 +68,7 @@ for entry in $VARIANTS; do
       variant="$vname" hardware=cloud_h100 \
       'eval.conditions=[baseline,spa]' "eval.lambda_scale=[$LAM]" \
       eval.num_designs="$K" eval.proteinmpnn.num_seqs="$NSEQ" \
+      "${SAMPLER_ARGS[@]}" \
       eval.length="$len" \
       eval.ckpt="/workspace/weights/spa_${vname}.pt" \
       eval.prompt_cache="$PREP/$id.pt" \

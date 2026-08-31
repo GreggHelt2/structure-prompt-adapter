@@ -64,7 +64,11 @@ else
 fi
 export PROTEINMPNN_REPO="$MPNN_REPO"
 SPA_CKPT=/workspace/weights/spa_multigran.pt
-COMMON=(--ckpt "$SPA_CKPT" --rfd3-ckpt "$RFD3_CKPT" --pdb-dir "$PREP" --u-len "$ULEN" --c-len "$CLEN")
+# RFD3 sampler configuration, passed through to probe_hard_soft_free.py (which generates here;
+# score_threeway_designability.py only refolds EXISTING backbones and needs no sampler).
+ARM="${ARM:-ours}"
+COMMON=(--ckpt "$SPA_CKPT" --rfd3-ckpt "$RFD3_CKPT" --pdb-dir "$PREP" --u-len "$ULEN" --c-len "$CLEN"
+        --sampler-arm "$ARM")
 
 OK=0
 if [ "$STAGE" = "adherence" ]; then

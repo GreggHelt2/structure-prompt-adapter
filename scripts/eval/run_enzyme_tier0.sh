@@ -58,6 +58,12 @@ if [ "$STAGE" = "designability" ]; then
   )
 fi
 
+# RFD3 sampler configuration. ARM=ours (default) = the checkpoint's 100 / gamma_0 0.8; ARM=rfd3 =
+# the RFdiffusion3 paper's 200 / 0.6. NB: $ARM here is the SAMPLER arm; run_arm()'s local $arm below
+# is the experiment arm (compatible/incompatible fold), an unrelated name that predates this.
+ARM="${ARM:-ours}"
+. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
+
 run_arm () {   # $1 = arm label, $2 = prompt G pdb
   local arm="$1" gpdb="$2"          # NOTE: separate `local` — `set -u` expands all args before assigning,
   local odir="$OUT/${STAGE}_${arm}" # so ${arm} must be set on a prior line before it is referenced here.
@@ -65,6 +71,7 @@ run_arm () {   # $1 = arm label, $2 = prompt G pdb
   [ "${#OF3_OVR[@]}" -gt 0 ] && of3_out=("+eval.flywheel.refolder.out_dir=$odir/of3")
   echo "[tier0] === arm=$arm  G=$gpdb  λ=$LAM_LIST  K=$K  -> $odir ==="
   conda run -n "$ENV" python scripts/eval/run_flywheel.py "eval=$EVAL_CFG" \
+    "${SAMPLER_ARGS[@]}" \
     eval.ckpt="$CKPT" \
     eval.motif.source_pdb="$CEX" \
     eval.prompt_pdb="$gpdb" \

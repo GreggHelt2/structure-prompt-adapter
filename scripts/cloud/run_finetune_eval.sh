@@ -64,6 +64,12 @@ gcloud storage cp "$SPA_ADAPTER_CKPT_URI" /workspace/weights/spa_C_final.pt
 gcloud storage cp "$OF3_CKPT_URI" /workspace/weights/of3-p2-155k.pt
 gcloud storage cp "$TARGET_PDB_URI" /workspace/target.pdb
 
+# RFD3 sampler configuration; see scripts/_sampler_arm.sh. ARM=ours (default) is the released
+# checkpoint's 100 / gamma_0 0.8, ARM=rfd3 is the RFdiffusion3 paper's 200 / 0.6. Always all three
+# knobs together: a partial setting matches neither published configuration.
+ARM="${ARM:-ours}"
+. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
+
 log "config: length=$LENGTH K=$K N=$NSEQ seed=$SEED lambdas=$LAMBDAS"
 
 # --- Row 3 (baseline, unconditional) + row 4 (spa, fine-tuned host's own adapter) in one flywheel call ---
@@ -72,6 +78,7 @@ python "$SPA_REPO/scripts/eval/run_flywheel.py" \
   "eval.conditions=[baseline,spa]" \
   eval.lambda_scale="$LAMBDAS" \
   eval.num_designs="$K" eval.length="$LENGTH" \
+  "${SAMPLER_ARGS[@]}" \
   eval.proteinmpnn.num_seqs="$NSEQ" eval.proteinmpnn.seed="$SEED" eval.seed="$SEED" \
   eval.prompt_pdb=/workspace/target.pdb \
   eval.ckpt=/workspace/weights/spa_C_final.pt \

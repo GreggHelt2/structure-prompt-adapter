@@ -137,7 +137,7 @@ def _precompute_prompts(prompts, pdb_dir, pattern, variant_strip, device, out_di
     return info
 
 
-def _run_group(base_cfg, rec, keep, group, ckpt, conditions, lam, K, seed, timesteps,
+def _run_group(base_cfg, rec, keep, group, ckpt, conditions, lam, K, seed, sampler,
                out_dir, refolder):
     """Run the flywheel for one (prompt, group); return the list of per-design score dicts (tagged)."""
     from omegaconf import OmegaConf
@@ -152,7 +152,9 @@ def _run_group(base_cfg, rec, keep, group, ckpt, conditions, lam, K, seed, times
     ev.num_designs = int(K)
     ev.length = int(rec["n"])
     ev.seed = int(seed)
-    ev.num_timesteps = timesteps
+    # All three sampler knobs together (dev docs/plan/81 §7; spa.eval.sampler_arms).
+    for _k, _v in sampler.items():
+        setattr(ev, _k, _v)
     ev.prompt_cache = rec["cache"]
     ev.prompt_pdb = None
     ev.prompt_id = Path(rec["pdb"]).stem
@@ -192,6 +194,7 @@ def main() -> None:
     ap.add_argument("--lambda", dest="lam", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda:0")
+    from spa.eval.sampler_arms import add_arm_argument as _add_arm; _add_arm(ap)
     ap.add_argument("--num-timesteps", type=int, default=None,
                     help="RFD3 sampler steps (None -> inherit the checkpoint's 100, NOT the 200 the "
                          "CLI/dataclass claim; see configs/eval/default.yaml)")
@@ -218,6 +221,11 @@ def main() -> None:
             conda_env="spa-verify-of3",
         )
 
+    # ONE sampler configuration for the whole run, all three knobs together (dev docs/plan/81 §7).
+    from spa.eval.sampler_arms import resolve_with_legacy
+    _sampler = resolve_with_legacy(getattr(args, "sampler_arm", None), args.num_timesteps)
+    print(f"[sampler] arm={getattr(args, 'sampler_arm', None)} -> {_sampler}")
+
     all_rows: list[dict] = []
     per_prompt: list[dict] = []
     for pid, rec in info.items():
@@ -230,10 +238,10 @@ def main() -> None:
         # Call 1 (multigran ckpt): baseline + spa-multigran. Call 2 (base ckpt): spa-base.
         rows = _run_group(base_cfg, rec, keep, "spa-multigran", args.multigran_ckpt,
                           ["baseline", "spa"], args.lam, args.num_designs, args.seed,
-                          args.num_timesteps, out_dir / pid / "multigran", refolder)
+                          _sampler, out_dir / pid / "multigran", refolder)
         rows += _run_group(base_cfg, rec, keep, "spa-base", args.base_ckpt,
                            ["spa"], args.lam, args.num_designs, args.seed,
-                           args.num_timesteps, out_dir / pid / "base", refolder)
+                           _sampler, out_dir / pid / "base", refolder)
         for r in rows:
             r["prompt_id"] = pid
         all_rows += rows

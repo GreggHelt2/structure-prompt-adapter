@@ -196,7 +196,7 @@ def _precompute(ids, pdb_dir, strip, device, out_dir):
 # --------------------------------------------------------------------------------------------------
 
 
-def _run_example(ex, prompt_cache_pt, ckpt, lambdas, K, seed, timesteps, feather, out_dir, device, nca_G):
+def _run_example(ex, prompt_cache_pt, ckpt, lambdas, K, seed, sampler, feather, out_dir, device, nca_G):
     import torch
 
     from spa.eval.generate import _run_once, _seed_all, build_eval_engine, load_adapter, write_pdb
@@ -215,7 +215,7 @@ def _run_example(ex, prompt_cache_pt, ckpt, lambdas, K, seed, timesteps, feather
                   "zero_init_output": True, "lambda_init": 1.0, "input_rmsnorm": True},
         "variant": {"name": "C", "projector": "identity", "resampler_tokens": None,
                     "strip_bos_eos": True, "use_clss": False},
-        "eval": {"num_designs": K, "length": L, "specification": None, "num_timesteps": timesteps,
+        "eval": {"num_designs": K, "length": L, "specification": None, **sampler,
                  "seed": seed, "ckpt": ckpt, "out_dir": str(out_dir)},
     })
     engine = build_eval_engine(cfg)
@@ -436,7 +436,9 @@ def main():
     ap.add_argument("--lambdas", default="1,2")
     ap.add_argument("--num-designs", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--num-timesteps", type=int, default=None)
+    ap.add_argument("--num-timesteps", type=int, default=None,
+                    help="DEPRECATED, use --sampler-arm; rejected if it disagrees with the arm.")
+    from spa.eval.sampler_arms import add_arm_argument as _add_arm; _add_arm(ap)
     ap.add_argument("--feather", action="store_true")
     ap.add_argument("--pdb-dir", default=DEFAULT_PDB_DIR)
     ap.add_argument("--device", default="cuda:0")
@@ -467,7 +469,12 @@ def main():
 
     caches = _precompute(foreign, args.pdb_dir, True, args.device, out_dir)
 
-    results = {"config": vars(args), "frames": {}}
+    # ONE sampler configuration for the whole run, all three knobs together (dev docs/plan/81 §7).
+    from spa.eval.sampler_arms import resolve_with_legacy
+    _sampler = resolve_with_legacy(getattr(args, "sampler_arm", None), args.num_timesteps)
+    print(f"[sampler] arm={getattr(args, 'sampler_arm', None)} -> {_sampler}")
+
+    results = {"config": vars(args), "sampler": _sampler, "frames": {}}
     for frame in frames:
         exs = _examples(frame, foreign, hosts, args.fixed_len, args.pdb_dir, nca, ratios)
         exs = [e for e in exs if e["L"] <= 320]   # A5000 sanity cap (no OF3 here, so a bit past 256 is ok)
@@ -476,7 +483,7 @@ def main():
         summ = []
         for ex in exs:
             rows = _run_example(ex, caches[ex["G"]], args.ckpt, lambdas, args.num_designs,
-                                args.seed, args.num_timesteps, args.feather, out_dir, args.device, nca_G[ex["G"]])
+                                args.seed, _sampler, args.feather, out_dir, args.device, nca_G[ex["G"]])
             summ.append(_summarize(ex, rows, lambdas))
         _print_frame(frame, summ, lambdas)
         if frame == "ratio_sweep":

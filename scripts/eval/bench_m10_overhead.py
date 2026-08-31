@@ -158,7 +158,14 @@ def _base_overrides(*, variant, out_dir, length=None, num_designs=8, ckpt=None,
 # --------------------------------------------------------------------------------------------------
 # SS2/SS2a: arms table (baseline-inert / cold / warm) x both sampler settings.
 # --------------------------------------------------------------------------------------------------
-_SAMPLERS = {"100": dict(num_timesteps=100, gamma_0=0.8), "200": dict(num_timesteps=200, gamma_0=0.6)}
+# Derived from the single definition in spa.eval.sampler_arms rather than restated. The KEYS stay
+# "100"/"200" because this script names its output directories `s100_L150` / `s200_L150` and those
+# paths are cited in dev docs/results/34; renaming them would orphan the archived artifacts.
+# step_scale is dropped here (1.5 in both arms, and _base_overrides does not pass it), so the two
+# arms still differ in exactly the two knobs this benchmark varies.
+from spa.eval.sampler_arms import resolve as _resolve_arm
+_SAMPLERS = {k: {kk: vv for kk, vv in _resolve_arm(k).items() if kk != "step_scale"}
+             for k in ("100", "200")}
 
 
 def phase_arms(a) -> list[dict]:

@@ -369,6 +369,13 @@ def run_grid(args):
     base_variant = {"name": "C", "projector": "identity", "resampler_tokens": None,
                     "strip_bos_eos": True, "use_clss": False}
 
+    # ONE sampler configuration for the whole run, all three knobs together. Selecting an arm
+    # rather than a bare step count is what stops a 200-step run silently keeping the
+    # checkpoint's gamma_0=0.8 (dev docs/plan/81 §7; spa.eval.sampler_arms).
+    from spa.eval.sampler_arms import resolve_with_legacy
+    _sampler = resolve_with_legacy(getattr(args, "sampler_arm", None), args.num_timesteps)
+    print(f"[sampler] arm={getattr(args, 'sampler_arm', None)} -> {_sampler}")
+
     grid = []
     for layout in layouts:
         contig, order = build_contig(args.motif_seg, args.u_len, args.c_len, layout)
@@ -377,7 +384,7 @@ def run_grid(args):
             "hardware": {"device": device},
             "model": base_model, "variant": base_variant,
             "eval": {"num_designs": K, "length": None, "specification": None,
-                     "num_timesteps": args.num_timesteps, "seed": int(args.seed), "ckpt": args.ckpt,
+                     **_sampler, "seed": int(args.seed), "ckpt": args.ckpt,
                      "out_dir": str(out_dir), "motif": {"source_pdb": motif_pdb, "contig": contig}},
         })
         motif_spec, M_idx, U_idx, C_idx, L, _cr = build_partition(
@@ -519,7 +526,10 @@ def main():
     ap.add_argument("--lambdas", default=None, help="comma list of λ to sweep (overrides --lambda), e.g. 1,2,3")
     ap.add_argument("--num-designs", type=int, default=8, help="K designs (paired noise)")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--num-timesteps", type=int, default=None, help="sampler steps (None → rfd3 edm.yaml 100)")
+    ap.add_argument("--num-timesteps", type=int, default=None,
+                    help="DEPRECATED, use --sampler-arm. Kept so recorded invocations still run; it is "
+                         "rejected if it disagrees with the selected arm (spa.eval.sampler_arms).")
+    from spa.eval.sampler_arms import add_arm_argument as _add_arm; _add_arm(ap)
     ap.add_argument("--pdb-dir", default=DEFAULT_PDB_DIR)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "threeway"))
