@@ -68,6 +68,103 @@ class Design:
 # --------------------------------------------------------------------------------------------------
 
 
+#: The three sampler knobs reachable as TOP-LEVEL ``eval`` keys. Kept because every driver in this
+#: repo and every invocation recorded in the dev docs uses them; new knobs go under ``eval.sampler``.
+_LEGACY_SAMPLER_KEYS = ("num_timesteps", "gamma_0", "step_scale")
+
+
+def _sampler_fields() -> dict:
+    """``SampleDiffusionConfig``'s fields, by INTROSPECTION so this cannot go stale.
+
+    Copying the field list would reintroduce exactly the drift this function exists to prevent: the
+    host gains a knob, our copy does not, and setting it becomes a silent no-op again.
+    """
+    from rfd3.model.inference_sampler import SampleDiffusionConfig
+
+    return dict(SampleDiffusionConfig.__dataclass_fields__)
+
+
+def _coerce_sampler_value(name: str, value, field):
+    """Coerce to the field's declared default type. OmegaConf can hand back strings."""
+    default = getattr(field, "default", None)
+    if isinstance(default, bool):
+        # bool("false") is True, so parse text explicitly rather than casting.
+        if isinstance(value, str):
+            low = value.strip().lower()
+            if low in ("true", "1", "yes"):
+                return True
+            if low in ("false", "0", "no"):
+                return False
+            raise RuntimeError(f"eval.sampler.{name}: {value!r} is not a boolean")
+        return bool(value)
+    if isinstance(default, int) and not isinstance(default, bool):
+        return int(value)
+    if isinstance(default, float):
+        return float(value)
+    return value
+
+
+def resolve_sampler_overrides(ev) -> dict:
+    """Collect RFD3 sampler overrides from the ``eval`` group, refusing SILENT NO-OPS.
+
+    **The problem this solves.** Hydra's ``+`` adds undeclared keys without complaint, so
+    ``+eval.gamma_min=2.0`` used to land in ``cfg.eval``, never be read, and never warn: the run
+    reported success and generated at the checkpoint's value. That is the same failure class as a
+    driver setting the step count while leaving ``gamma_0`` alone, and it is worse, because there is
+    no log line at all to contradict.
+
+    **The surface.** ``SampleDiffusionConfig`` has ~21 fields and only three were ever reachable.
+    Anything else now goes through the namespaced block::
+
+        +eval.sampler.gamma_min=2.0
+        +eval.sampler.use_classifier_free_guidance=true
+
+    Namespaced rather than top-level on purpose: passing through any ``eval.<k>`` that happened to
+    match a sampler field would mean a future ``eval`` key named ``p`` or ``kind`` silently becoming a
+    sampler override. Today those sets intersect in exactly the three legacy names.
+
+    Raises rather than guessing on: an unknown ``eval.sampler`` field, a knob set both ways at once,
+    and a top-level ``eval.<k>`` that is a sampler field but not one of the three legacy names.
+    """
+    fields = _sampler_fields()
+    out: dict = {}
+
+    for key in _LEGACY_SAMPLER_KEYS:
+        value = ev.get(key)
+        if value is not None:
+            out[key] = _coerce_sampler_value(key, value, fields[key])
+
+    block = ev.get("sampler") or {}
+    for key in list(block.keys()):
+        key = str(key)
+        if key not in fields:
+            raise RuntimeError(
+                f"eval.sampler.{key} is not a field of RFD3's SampleDiffusionConfig. "
+                f"Valid fields: {sorted(fields)}"
+            )
+        value = block.get(key)
+        if value is None:
+            continue
+        if key in out and _coerce_sampler_value(key, value, fields[key]) != out[key]:
+            raise RuntimeError(
+                f"sampler knob '{key}' set two ways: eval.{key}={out[key]} and "
+                f"eval.sampler.{key}={value}. Set it once."
+            )
+        out[key] = _coerce_sampler_value(key, value, fields[key])
+
+    # The guard that closes the trap. A top-level eval key naming a sampler field that SPA does not
+    # read at top level would otherwise be accepted by Hydra and silently dropped here.
+    for key in fields:
+        if key in _LEGACY_SAMPLER_KEYS:
+            continue
+        if ev.get(key) is not None:
+            raise RuntimeError(
+                f"eval.{key} is an RFD3 sampler field but SPA does not read it at the top level, so "
+                f"it would be SILENTLY IGNORED. Use eval.sampler.{key}={ev.get(key)!r} instead."
+            )
+    return out
+
+
 def build_eval_engine(cfg):
     """Build + initialize the RFD3 inference engine for generation (loads frozen host weights).
 
@@ -93,15 +190,7 @@ def build_eval_engine(cfg):
     spec = dict(ev.get("specification") or {})
     if ev.get("length") is not None:
         spec.setdefault("length", int(ev.length))
-    sampler: dict = {}
-    if ev.get("num_timesteps") is not None:
-        sampler["num_timesteps"] = int(ev.num_timesteps)
-    # gamma_0 = noise level, step_scale = eta. RFD3 paper (Fig. S4f): eta 1.5, gamma_0 0.6, 200 steps
-    # "used throughout this work unless otherwise specified". Checkpoint ships 100 / 0.8.
-    if ev.get("gamma_0") is not None:
-        sampler["gamma_0"] = float(ev.gamma_0)
-    if ev.get("step_scale") is not None:
-        sampler["step_scale"] = float(ev.step_scale)
+    sampler = resolve_sampler_overrides(ev)
 
     engine = RFD3InferenceEngine(
         **RFD3InferenceConfig(
@@ -146,7 +235,11 @@ def _assert_sampler_effective(merged_cfg, requested: dict):
         print(msg, file=sys.stderr, flush=True)
         print(msg, flush=True)
 
-    keys = ("num_timesteps", "gamma_0", "step_scale")
+    # Read back EVERY requested key, not a hardcoded three: eval.sampler.<field> can now request any
+    # SampleDiffusionConfig field, and a knob whose landing is unverified is exactly what this
+    # function exists to prevent. The three legacy names are always shown, requested or not, so the
+    # log line still states the sampler configuration in full.
+    keys = tuple(dict.fromkeys(_LEGACY_SAMPLER_KEYS + tuple(requested)))
     effective = {}
     try:
         from omegaconf import OmegaConf
@@ -168,10 +261,22 @@ def _assert_sampler_effective(merged_cfg, requested: dict):
     _say(f"[sampler] EFFECTIVE: {effective}  (requested overrides: "
          f"{requested or '{} -> checkpoint defaults'})")
 
+    def _differs(effective_value, requested_value) -> bool:
+        """Numeric comparison when both sides are numbers, equality otherwise.
+
+        `kind`, `solver` and `center_option` are strings and `float()` on them raises, which the
+        earlier hardcoded-three version never had to handle.
+        """
+        num = (int, float)
+        if isinstance(effective_value, num) and isinstance(requested_value, num) \
+                and not isinstance(effective_value, bool) and not isinstance(requested_value, bool):
+            return float(effective_value) != float(requested_value)
+        return effective_value != requested_value
+
     mismatched = {
         k: (v, effective.get(k))
         for k, v in requested.items()
-        if effective.get(k) is not None and float(effective[k]) != float(v)
+        if effective.get(k) is not None and _differs(effective[k], v)
     }
     if mismatched:
         raise RuntimeError(

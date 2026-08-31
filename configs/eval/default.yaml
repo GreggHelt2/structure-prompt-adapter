@@ -17,6 +17,16 @@ num_timesteps: null        # RFD3 sampler steps (null -> effective default 100 f
 # generate.py reads the values back off the LIVE sampler and ABORTS if an override did not take effect.
 gamma_0: null              # RFD3 sampler noise level (null -> checkpoint's 0.8; RFD3 paper uses 0.6)
 step_scale: null           # RFD3 sampler step scale, eta (null -> checkpoint's 1.5; RFD3 paper uses 1.5)
+# EVERY OTHER RFD3 sampler knob, namespaced. The three above are reachable at the top level only for
+# backwards compatibility; anything else in SampleDiffusionConfig goes here, e.g.
+#   +eval.sampler.gamma_min=2.0   +eval.sampler.use_classifier_free_guidance=true
+# Validated by INTROSPECTION against SampleDiffusionConfig, so an unknown field RAISES instead of
+# being silently dropped, and a top-level eval.<sampler-field> raises too and names this block as the
+# fix. Before this existed, `+eval.gamma_min=2.0` was accepted by Hydra and then silently ignored:
+# the run reported success and generated at the checkpoint's value. See spa.eval.generate
+# .resolve_sampler_overrides and dev docs/plan/81 §7d. Namespaced rather than top-level so a future
+# eval key named `p` or `kind` cannot become a sampler override by accident.
+sampler: null
 seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
 ladder: null               # checkpoint-step ADHERENCE LADDER (scripts/eval/ladder_sweep.py, dev 13): list of
                            #   snapshot paths to sweep (adherence vs training step). null -> not a ladder run.
