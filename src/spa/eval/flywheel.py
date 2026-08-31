@@ -124,6 +124,44 @@ def _print_summary(summaries, deltas) -> None:
 # --------------------------------------------------------------------------------------------------
 
 
+def release_gpu_memory(stage: str) -> dict:
+    """Drop CUDA allocations held by a finished stage, so the next one can actually use the card.
+
+    **Why this exists.** Stage 3 refolds by launching OpenFold3 as a SUBPROCESS (its deps cannot be
+    imported here), and a subprocess gets its own CUDA context: it cannot reuse anything this process
+    is still holding. PyTorch's caching allocator does not return freed blocks to the driver on its
+    own, so after Stage 1 the RFD3 engine's arena stays reserved for the life of the process even
+    once the engine itself is unreachable.
+
+    **Measured, by hitting it.** A 374-residue b1-full prompt generated all 16 backbones fine and then
+    died in the refold stage with `torch.OutOfMemoryError`, whose own text reads: *"Process 310530 has
+    21.95 GiB memory in use. Including non-PyTorch memory, this process has 1.55 GiB memory in use."*
+    The parent held 21.95 GiB of a 23.55 GiB card; the OF3 child got 1.55 GiB and died asking for 20
+    MiB. OpenFold3 alone needs about 4.3 GiB at that length (dev `docs/results/data/28_of3_length_ceiling.json`),
+    so it fits comfortably; it simply never had the room. On an 80 GB H100 the slack hides this, which
+    is why long prompts were believed to be "H100-only" (`configs/eval/manifest_b1_full.yaml`).
+
+    Returns the before/after figures so callers can log them, and is a no-op without CUDA.
+    """
+    import gc
+
+    import torch
+
+    if not torch.cuda.is_available():
+        return {}
+    before_alloc = torch.cuda.memory_allocated() / 2**30
+    before_resv = torch.cuda.memory_reserved() / 2**30
+    gc.collect()
+    torch.cuda.empty_cache()
+    after_alloc = torch.cuda.memory_allocated() / 2**30
+    after_resv = torch.cuda.memory_reserved() / 2**30
+    print(f"[flywheel] released GPU memory {stage}: "
+          f"allocated {before_alloc:.2f} -> {after_alloc:.2f} GiB, "
+          f"reserved {before_resv:.2f} -> {after_resv:.2f} GiB", flush=True)
+    return {"before_allocated_gib": before_alloc, "after_allocated_gib": after_alloc,
+            "before_reserved_gib": before_resv, "after_reserved_gib": after_resv}
+
+
 def run_flywheel(cfg, *, refolder=None) -> dict:
     """Run the full SPA validation flywheel (Stages 1→4) from a composed config; return the artifacts.
 
@@ -139,9 +177,13 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
 
     # Stage 1 — generate RFD3 ± SPA backbones.
     designs = generate(cfg)
+    # The engine built inside generate() is unreachable now (run_flywheel passes none in, so nothing
+    # holds it), but its allocator arena is not. Release before Stage 3 hands the card to a subprocess.
+    release_gpu_memory("after Stage 1 (generate)")
 
     # Stage 2 — inverse-fold each backbone; key by design name (== PDB stem == SequenceSet.name).
     seqsets = inverse_fold(cfg, designs=designs)
+    release_gpu_memory("after Stage 2 (inverse fold)")
     seqsets_by_name = {ss.name: ss for ss in seqsets}
 
     # Stage 3 — refold (OF3): pluggable + stubbed.
