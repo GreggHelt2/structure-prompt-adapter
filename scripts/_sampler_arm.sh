@@ -23,13 +23,18 @@
 
 ARM="${ARM:-ours}"
 
+# Respect $PYTHON, because a LOCAL driver runs from an activated spa-dev but a bare `python` can still
+# resolve to base conda, where `spa` is not installed. The cloud drivers set no PYTHON and get the
+# container's `python`, unchanged. (Found by the first end-to-end smoke of run_b1_full_local.sh.)
+_sampler_arm_py="${PYTHON:-python}"
+
 _sampler_arm_out=""
-if ! _sampler_arm_out="$(python -c '
+if ! _sampler_arm_out="$("$_sampler_arm_py" -c '
 import sys
 from spa.eval.sampler_arms import hydra_overrides
 sys.stdout.write("\n".join(hydra_overrides(sys.argv[1])))
 ' "$ARM" 2>&1)"; then
-  echo "FATAL: could not resolve sampler ARM='$ARM'." >&2
+  echo "FATAL: could not resolve sampler ARM='$ARM' using '$_sampler_arm_py'." >&2
   echo "       $_sampler_arm_out" >&2
   echo "       (is the spa package importable here? this helper is the single source of truth and" >&2
   echo "        MUST NOT be worked around by hardcoding sampler values in a driver.)" >&2
@@ -37,7 +42,7 @@ sys.stdout.write("\n".join(hydra_overrides(sys.argv[1])))
 fi
 
 mapfile -t SAMPLER_ARGS <<< "$_sampler_arm_out"
-unset _sampler_arm_out
+unset _sampler_arm_out _sampler_arm_py
 
 # Guard against a silently empty array, which would run at the checkpoint's inherited settings while
 # the log claimed an arm had been selected. Three overrides, always: num_timesteps, gamma_0, step_scale.

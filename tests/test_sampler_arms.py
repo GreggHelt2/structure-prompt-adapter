@@ -125,6 +125,9 @@ _SPLICING_DRIVERS = [
     "scripts/cloud/run_finetune_eval.sh",
     "scripts/cloud/run_trivial_baseline.sh",
     "scripts/eval/run_enzyme_tier0.sh",
+    # The local twins of the two cloud drivers (dev docs/plan/81 §5b / G1a).
+    "scripts/eval/run_b1_full_local.sh",
+    "scripts/eval/run_variant_desig_local.sh",
 ]
 
 #: Drivers that pass the arm through to a python entry point by flag instead.
@@ -167,3 +170,21 @@ def test_generating_probe_resolves_an_arm_rather_than_a_bare_step_count(script):
     assert "add_arm_argument" in text, f"{script} does not expose --sampler-arm"
     # The old pattern: feeding args.num_timesteps straight into the eval config, gamma_0 untouched.
     assert '"num_timesteps": args.num_timesteps' not in text, f"{script} still wires the bare flag"
+
+
+def test_shell_helper_respects_the_PYTHON_override():
+    """A local driver runs from an activated spa-dev, but a bare `python` can hit base conda.
+
+    Regression: the first end-to-end smoke of `run_b1_full_local.sh` failed with
+    `ModuleNotFoundError: No module named 'spa'` because the helper hardcoded `python`. It failed
+    loudly, which is the design, but the helper must honour $PYTHON so a driver can name its
+    interpreter. The cloud drivers set no $PYTHON and still get the container's `python`.
+    """
+    out = subprocess.run(
+        ["bash", "-c", f'PYTHON=/nonexistent/python ARM=ours . "{REPO}/scripts/_sampler_arm.sh"; echo REACHED'],
+        capture_output=True, text=True, cwd=REPO,
+        env={"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin", "HOME": str(Path.home())},
+    )
+    assert out.returncode == 2, "helper ignored $PYTHON and fell back to a working interpreter"
+    assert "/nonexistent/python" in out.stderr, out.stderr
+    assert "REACHED" not in out.stdout

@@ -31,6 +31,15 @@ def main() -> None:
     ap.add_argument("--pdb-dir", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--n-seg", type=int, default=2, help="motif segments to carve (H5 used 2)")
+    ap.add_argument("--out-name", default="b1_full_resolved.json",
+                    help="resolved-manifest filename (keep the default unless prepping a second set "
+                         "into the same directory)")
+    # Fallbacks for manifests that do not pin the run config (curated15, lambda_sweep). Ignored when
+    # the manifest declares its own, which manifest_b1_full.yaml does.
+    ap.add_argument("--spa-ckpt", default="spa-Nx1536-uncond/spa_C_final.pt")
+    ap.add_argument("--lambda-scale", default=1)
+    ap.add_argument("--num-designs", type=int, default=8)
+    ap.add_argument("--num-seqs", type=int, default=8)
     args = ap.parse_args()
 
     import torch
@@ -64,18 +73,31 @@ def main() -> None:
         shutil.copyfile(pdb, out / f"{uid}.pdb")
         # sanity: SPA prompt length must equal the motif contig length (generate.build_motif asserts it)
         assert emb.shape[0] == c["len"], f"{uid}: emb {emb.shape[0]} != contig len {c['len']}"
+        # `band` is optional: manifest_b1_full.yaml declares it (le256 / gt256 drive which prompts the
+        # cloud long-10 run selects), but manifest_curated15.yaml and manifest_lambda_sweep.yaml do not.
+        # Derive it from the length rather than requiring it, so ONE prep path serves every manifest
+        # (dev docs/plan/81 §5b: row 2.1's 17-fold set is manifest_lambda_sweep.yaml).
+        band = p.get("band") or ("le256" if c["len"] <= 256 else "gt256")
         resolved.append({
-            "id": uid, "len": c["len"], "fold": p["fold"], "band": p["band"],
+            "id": uid, "len": c["len"], "fold": p.get("fold"), "band": band,
             "pt": f"{uid}.pt", "pdb": f"{uid}.pdb", "contig": c["contig"], "n_motif": c["n_motif"],
         })
         print(f"[prep] {uid}: emb [{emb.shape[0]},{emb.shape[1]}]  motif {c['n_motif']}res  contig {c['contig']}")
 
+    # The four run-config keys are optional for the same reason `band` is: only manifest_b1_full.yaml
+    # pins them. A manifest without them still preps fine and the driver supplies its own values; the
+    # CLI flags below let a caller pin them explicitly. b1_full's own output is unchanged, because it
+    # declares all four.
     payload = {
-        "spa_ckpt": man["spa_ckpt"], "lambda_scale": man["lambda_scale"],
-        "num_designs": man["num_designs"], "num_seqs": man["num_seqs"], "prompts": resolved,
+        "spa_ckpt": man.get("spa_ckpt", args.spa_ckpt),
+        "lambda_scale": man.get("lambda_scale", args.lambda_scale),
+        "num_designs": man.get("num_designs", args.num_designs),
+        "num_seqs": man.get("num_seqs", args.num_seqs),
+        "source_manifest": str(Path(args.manifest).resolve()),
+        "prompts": resolved,
     }
-    (out / "b1_full_resolved.json").write_text(json.dumps(payload, indent=2))
-    print(f"[prep] wrote {len(resolved)} prompts -> {out}/b1_full_resolved.json")
+    (out / args.out_name).write_text(json.dumps(payload, indent=2))
+    print(f"[prep] wrote {len(resolved)} prompts -> {out}/{args.out_name}")
 
 
 if __name__ == "__main__":
