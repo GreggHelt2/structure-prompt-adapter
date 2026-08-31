@@ -36,12 +36,12 @@
 #   NSEQ_OVERRIDE=2      override the manifest's ProteinMPNN N (8)
 #   OUT_DIR=...          default outputs/_incoming/<date>__b1_full_local_<arm>/
 #
-# LENGTH NOTE. configs/eval/manifest_b1_full.yaml calls its 10 `gt256` prompts "H100-only", on the
-# belief that OpenFold3 above 256 residues needs the 80 GB card. **That is stale and was refuted by
-# measurement**: dev docs/results/data/28_of3_length_ceiling.json (scripts/eval/bench_of3_length.py,
-# 2026-07-29) records 4.3 GB at 368 residues and 6.1 GB at 450 on this 24 GB A5000, with no failure
-# anywhere in the range. So BAND defaults to `all`. What that bench did NOT cover is RFD3 *generation*
-# at those lengths, so if the long-10 OOM during generation, fall back to BAND=le256 and report it.
+# LENGTH NOTE. BAND defaults to `all`, including the 10 `gt256` prompts the manifest used to call
+# "H100-only". ✅ **Verified end to end on this A5000 2026-08-31**: `A0A2V8GJC1` at L=374, the longest
+# entry, generated 16/16 backbones (25.2 s/backbone at 200 steps) and completed all 128 refolds, 1 h 13
+# min. It failed on a first attempt, but on a memory leak in our own pipeline rather than the card: the
+# parent held 21.70 GiB of reserved-but-unallocated arena when the OF3 subprocess launched. That is
+# fixed in `spa.eval.flywheel` (see `release_gpu_memory`), and the manifest note is corrected.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # repo root (this file is scripts/eval/)
