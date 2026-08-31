@@ -27,6 +27,15 @@ step_scale: null           # RFD3 sampler step scale, eta (null -> checkpoint's 
 # .resolve_sampler_overrides and dev docs/plan/81 §7d. Namespaced rather than top-level so a future
 # eval key named `p` or `kind` cannot become a sampler override by accident.
 sampler: null
+# EVERY OTHER RFD3 *engine* field (RFD3InferenceConfig), namespaced the same way. SPA computes six of
+# its twenty from other keys (ckpt_path, diffusion_batch_size, specification, inference_sampler, seed,
+# dump_trajectories) and those are REFUSED here so one knob keeps one spelling; the remaining fourteen
+# were unreachable until now, e.g.
+#   +eval.engine.low_memory_mode=true   +eval.engine.prevalidate_inputs=false
+# Same introspective validation and same top-level-key guard as `sampler` above. Unlike the sampler
+# these need no readback check: they are dataclass keyword arguments, set by construction rather than
+# merged onto the checkpoint's train_cfg. See spa.eval.generate.resolve_engine_overrides.
+engine: null
 seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
 ladder: null               # checkpoint-step ADHERENCE LADDER (scripts/eval/ladder_sweep.py, dev 13): list of
                            #   snapshot paths to sweep (adherence vs training step). null -> not a ladder run.

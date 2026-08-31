@@ -84,7 +84,7 @@ def _sampler_fields() -> dict:
     return dict(SampleDiffusionConfig.__dataclass_fields__)
 
 
-def _coerce_sampler_value(name: str, value, field):
+def _coerce_config_value(name: str, value, field):
     """Coerce to the field's declared default type. OmegaConf can hand back strings."""
     default = getattr(field, "default", None)
     if isinstance(default, bool):
@@ -95,7 +95,7 @@ def _coerce_sampler_value(name: str, value, field):
                 return True
             if low in ("false", "0", "no"):
                 return False
-            raise RuntimeError(f"eval.sampler.{name}: {value!r} is not a boolean")
+            raise RuntimeError(f"eval.{name}: {value!r} is not a boolean")
         return bool(value)
     if isinstance(default, int) and not isinstance(default, bool):
         return int(value)
@@ -132,7 +132,7 @@ def resolve_sampler_overrides(ev) -> dict:
     for key in _LEGACY_SAMPLER_KEYS:
         value = ev.get(key)
         if value is not None:
-            out[key] = _coerce_sampler_value(key, value, fields[key])
+            out[key] = _coerce_config_value(f"sampler.{key}", value, fields[key])
 
     block = ev.get("sampler") or {}
     for key in list(block.keys()):
@@ -145,12 +145,12 @@ def resolve_sampler_overrides(ev) -> dict:
         value = block.get(key)
         if value is None:
             continue
-        if key in out and _coerce_sampler_value(key, value, fields[key]) != out[key]:
+        if key in out and _coerce_config_value(f"sampler.{key}", value, fields[key]) != out[key]:
             raise RuntimeError(
                 f"sampler knob '{key}' set two ways: eval.{key}={out[key]} and "
                 f"eval.sampler.{key}={value}. Set it once."
             )
-        out[key] = _coerce_sampler_value(key, value, fields[key])
+        out[key] = _coerce_config_value(f"sampler.{key}", value, fields[key])
 
     # The guard that closes the trap. A top-level eval key naming a sampler field that SPA does not
     # read at top level would otherwise be accepted by Hydra and silently dropped here.
@@ -161,6 +161,101 @@ def resolve_sampler_overrides(ev) -> dict:
             raise RuntimeError(
                 f"eval.{key} is an RFD3 sampler field but SPA does not read it at the top level, so "
                 f"it would be SILENTLY IGNORED. Use eval.sampler.{key}={ev.get(key)!r} instead."
+            )
+    return out
+
+
+#: ``RFD3InferenceConfig`` fields SPA computes itself, mapped to the key that actually controls each.
+#: Refused inside ``eval.engine`` rather than silently losing to the derived value.
+_ENGINE_DERIVED = {
+    "ckpt_path": "paths.rfd3_ckpt",
+    "diffusion_batch_size": "eval.num_designs",
+    "specification": "eval.specification",
+    "inference_sampler": "eval.sampler (or the legacy eval.num_timesteps / gamma_0 / step_scale)",
+    "seed": "eval.seed",
+    "dump_trajectories": "eval.dump_trajectory",
+}
+
+
+def _engine_fields() -> dict:
+    """``RFD3InferenceConfig``'s fields, by introspection. Same rationale as :func:`_sampler_fields`."""
+    from rfd3.engine import RFD3InferenceConfig
+
+    return dict(RFD3InferenceConfig.__dataclass_fields__)
+
+
+def resolve_engine_overrides(ev) -> dict:
+    """Collect RFD3 *engine* overrides from ``eval.engine``, refusing silent no-ops.
+
+    The engine twin of :func:`resolve_sampler_overrides`, and it exists for the same reason: SPA
+    named 6 of ``RFD3InferenceConfig``'s 20 fields and the other 14 were unreachable, so RFD3+SPA
+    could not be driven into configurations plain RFD3 supports. That was never a property of the
+    adapter, only of this constructor, which re-implements engine construction rather than wrapping
+    RFD3's CLI::
+
+        +eval.engine.low_memory_mode=true
+        +eval.engine.prevalidate_inputs=false
+        +eval.engine.global_prefix=myrun_
+
+    **The six SPA computes are refused here, not silently overridden**, because each already has a
+    key that controls it and accepting both would make the effective value depend on argument order.
+
+    ⚠️ **Unlike the sampler, these need no readback check.** Sampler overrides are merged into the
+    checkpoint's ``train_cfg`` and can silently fail to land, which is what
+    :func:`_assert_sampler_effective` exists for. Engine fields are dataclass keyword arguments: they
+    are set by construction, and an unknown one is a ``TypeError`` at the call. The validation below
+    is for a better error message and to catch the top-level-key trap, not because the value might
+    not apply.
+    """
+    fields = _engine_fields()
+    settable = sorted(set(fields) - set(_ENGINE_DERIVED))
+    out: dict = {}
+
+    block = ev.get("engine") or {}
+    for key in list(block.keys()):
+        key = str(key)
+        if key in _ENGINE_DERIVED:
+            raise RuntimeError(
+                f"eval.engine.{key} is derived by SPA from {_ENGINE_DERIVED[key]}. Set that instead, "
+                "so one knob has one spelling."
+            )
+        if key not in fields:
+            raise RuntimeError(
+                f"eval.engine.{key} is not a field of RFD3's RFD3InferenceConfig. "
+                f"Valid fields: {settable}"
+            )
+        value = block.get(key)
+        if value is None:
+            continue
+        out[key] = _coerce_config_value(f"engine.{key}", value, fields[key])
+
+    if out.get("low_memory_mode"):
+        # Verified in foundry, and its own comment calls it a HACK: engine.py:203 does
+        # `os.environ["RFD3_LOW_MEMORY_MODE"] = "1"` and NOTHING in the repo ever unsets it. RFD3.py:43
+        # then reads that variable to decide `use_chunked_pll`, which changes whether P_LL is passed to
+        # the diffusion module at all. So this is not a per-engine setting, it is a PROCESS-GLOBAL
+        # ONE-WAY LATCH: every model built later in the same process inherits it, including one
+        # constructed with low_memory_mode=False. Measured by hitting it, when a test that built an
+        # engine this way broke an unrelated training test later in the same pytest session with
+        # "RFD3DiffusionModule.forward() missing 1 required positional argument: 'P_LL'".
+        import sys
+        for stream in (sys.stderr, sys.stdout):
+            print(
+                "[engine] WARNING: low_memory_mode=True sets the process-global env var "
+                "RFD3_LOW_MEMORY_MODE=1, which RFD3 never clears. It changes the forward call "
+                "convention (chunked P_LL) for EVERY model built later in this process, including "
+                "ones that did not ask for it. Safe in a one-engine-per-process driver; unsafe in a "
+                "loop that builds several engines. Unset it manually to undo.",
+                file=stream, flush=True,
+            )
+
+    for key in fields:
+        if key in _ENGINE_DERIVED:
+            continue
+        if ev.get(key) is not None:
+            raise RuntimeError(
+                f"eval.{key} is an RFD3 engine field but SPA does not read it at the top level, so "
+                f"it would be SILENTLY IGNORED. Use eval.engine.{key}={ev.get(key)!r} instead."
             )
     return out
 
@@ -191,6 +286,7 @@ def build_eval_engine(cfg):
     if ev.get("length") is not None:
         spec.setdefault("length", int(ev.length))
     sampler = resolve_sampler_overrides(ev)
+    engine_overrides = resolve_engine_overrides(ev)
 
     engine = RFD3InferenceEngine(
         **RFD3InferenceConfig(
@@ -203,6 +299,9 @@ def build_eval_engine(cfg):
             # +eval.dump_trajectory=true, the engine builds per-step AtomArrayStacks onto each
             # RFD3Output (see generate() for the multi-MODEL PDB write). Off => byte-identical.
             dump_trajectories=bool(ev.get("dump_trajectory", False)),
+            # Everything else RFD3's engine accepts, from eval.engine.<field>. Empty by default, so
+            # omitting the block is byte-identical to before this existed.
+            **engine_overrides,
         )
     )
     # initialize() RETURNS the merged config (checkpoint train_cfg + our overrides), which is the
