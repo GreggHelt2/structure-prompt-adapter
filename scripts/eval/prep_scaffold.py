@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -107,7 +108,10 @@ def main() -> None:
 
     if args.gcs_uri:
         import subprocess
-        gc = "/home/user1/google-cloud-sdk/bin/gcloud"
+        # gcloud is an SDK install location, not $SPA_PROJECT_ROOT. PATH lookup,
+        # portable across machines; override $GCLOUD to a full path if not on PATH.
+        # (Matches the GCLOUD="${GCLOUD:-gcloud}" convention in scripts/cloud/submit_*.sh.)
+        gc = os.environ.get("GCLOUD") or shutil.which("gcloud") or "gcloud"
         dst = args.gcs_uri.rstrip("/") + "/"
         for f in sorted(out.iterdir()):
             subprocess.run([gc, "storage", "cp", str(f), dst], check=True)

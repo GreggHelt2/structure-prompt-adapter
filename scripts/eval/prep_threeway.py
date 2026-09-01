@@ -27,7 +27,10 @@ DEFAULT_PDB_DIR = os.path.join(
     os.environ.get("SPA_PROJECT_ROOT", os.path.expanduser("~/projects/spa")),
     "training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb")
 PATTERN = "AF-{id}-F1-model_v4_esmfold_v1.pdb"
-GCLOUD = "/home/user1/google-cloud-sdk/bin/gcloud"
+# gcloud is an SDK install location, not $SPA_PROJECT_ROOT. PATH lookup,
+# portable across machines; override $GCLOUD to a full path if not on PATH.
+# (Matches the GCLOUD="${GCLOUD:-gcloud}" convention in scripts/cloud/submit_*.sh.)
+GCLOUD = os.environ.get("GCLOUD") or shutil.which("gcloud") or "gcloud"
 
 
 def main():
