@@ -9,7 +9,7 @@ HF token. Asserts prompt length == contig length (generate.build_motif requires 
 
 Usage: conda run -n spa-dev python scripts/eval/prep_b1_full.py \
          --manifest configs/eval/manifest_b1_full.yaml \
-         --pdb-dir /home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb \
+         --pdb-dir "$SPA_PROJECT_ROOT/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb" \
          --out-dir /tmp/.../b1_full_prep
 Outputs under --out-dir: <id>.pt + <id>.pdb (one each) + b1_full_resolved.json.
 """

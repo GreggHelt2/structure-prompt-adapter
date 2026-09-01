@@ -25,7 +25,9 @@ LAMBDAS="${LAMBDAS:-0,0.5,1,2}"
 K="${K:-8}"
 OUT="${OUT:-outputs/eval/enzyme_tier0}"
 INPUTS="${INPUTS:-$REPO/outputs/eval/enzyme_tier0/inputs}"
-CDDB_DIR="${CDDB_DIR:-/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb}"
+# $SPA_PROJECT_ROOT mirrors configs/paths/default.yaml's `project_root`; not machine-bound.
+SPA_PROJECT_ROOT="${SPA_PROJECT_ROOT:-$HOME/projects/spa}"
+CDDB_DIR="${CDDB_DIR:-$SPA_PROJECT_ROOT/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb}"
 INCOMPAT_ID="${INCOMPAT_ID:-A0A7S3EB45}"
 INCOMPAT_PDB="${INCOMPAT_PDB:-$CDDB_DIR/AF-${INCOMPAT_ID}-F1-model_v4_esmfold_v1.pdb}"
 ENV="${ENV:-spa-dev}"
@@ -47,7 +49,7 @@ LAM_LIST="[$(echo "$LAMBDAS" | sed 's/ //g')]"
 # OF3 refolder overrides (only for the designability stage; nokernel on the A5000 — dev 23 §7)
 OF3_OVR=()
 if [ "$STAGE" = "designability" ]; then
-  OF3_CKPT="${OF3_CKPT:-/home/user1/projects/spa/models/openfold3/of3-p2-155k.pt}"
+  OF3_CKPT="${OF3_CKPT:-$SPA_PROJECT_ROOT/models/openfold3/of3-p2-155k.pt}"
   OF3_YAML="${OF3_YAML:-$REPO/configs/of3/of3_nokernel.yml}"
   OF3_ENV="${OF3_ENV:-spa-verify-of3}"
   OF3_OVR=(
