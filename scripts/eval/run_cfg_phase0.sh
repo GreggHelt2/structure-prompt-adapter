@@ -18,9 +18,11 @@ set -u
 REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$REPO"
 
-# Prompt sources. Defaults point at a local CDDB/eval-external layout; override for another machine.
-PDB_DIR="${PDB_DIR:-/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb}"
-EXTERNAL_DIR="${EXTERNAL_DIR:-/home/user1/projects/spa/training_data/eval_external}"
+# Prompt sources, from two DIFFERENT subtrees: the CDDB release, and the curated eval-external set.
+# $SPA_PROJECT_ROOT mirrors configs/paths/default.yaml's `project_root`; not machine-bound.
+SPA_PROJECT_ROOT="${SPA_PROJECT_ROOT:-$HOME/projects/spa}"
+PDB_DIR="${PDB_DIR:-$SPA_PROJECT_ROOT/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb}"
+EXTERNAL_DIR="${EXTERNAL_DIR:-$SPA_PROJECT_ROOT/training_data/eval_external}"
 
 OUT="${OUT:-outputs/eval/cfg_phase0}"
 CKPT="${CKPT:-models/spa-Nx1536-uncond.pt}"

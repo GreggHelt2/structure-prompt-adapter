@@ -21,11 +21,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "configs/eval/manifest_curated15.yaml"
-DEFAULT_PDB_DIR = ("/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/"
-                   "atomistica_data_release/pdb")
+# CDDB PDBs. Resolved from $SPA_PROJECT_ROOT (default ~/projects/spa), matching
+# configs/paths/default.yaml's `project_root`, so this is not bound to one machine.
+DEFAULT_PDB_DIR = os.path.join(
+    os.environ.get("SPA_PROJECT_ROOT", os.path.expanduser("~/projects/spa")),
+    "training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb")
 
 
 def _load_pool(manifest_path, pdb_dir):

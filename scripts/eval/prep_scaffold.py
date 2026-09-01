@@ -16,7 +16,7 @@ Granularities (dev discussion 2026-07-02):
 Usage:
   conda run -n spa-dev python scripts/eval/prep_scaffold.py \
     --manifest configs/eval/manifest_lambda_sweep.yaml \
-    --pdb-dir /home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb \
+    --pdb-dir "$SPA_PROJECT_ROOT/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb" \
     --out-dir /tmp/.../scaffold_prep --grans domain,segment_small \
     --gcs-uri gs://genomancer-spa-cache/eval/scaffold/prep
 Outputs under --out-dir: <id>.pt + <id>.pdb (one each) + scaffold_resolved.json.

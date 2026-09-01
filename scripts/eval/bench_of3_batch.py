@@ -24,7 +24,10 @@ _OUTPUTS_ROOT = Path(os.environ.get(
     Path(os.environ.get("SPA_PROJECT_ROOT", Path.home() / "projects" / "spa")) / "outputs"))
 
 
-ROOT = Path("/home/user1/projects/spa")
+# Project root for INPUTS (ProteinMPNN repo, OF3 checkpoint, CDDB prompt PDBs). Resolved from
+# $SPA_PROJECT_ROOT (default ~/projects/spa), matching configs/paths/default.yaml's `project_root`,
+# so this is not bound to one machine. Run artifacts resolve separately, via _OUTPUTS_ROOT.
+ROOT = Path(os.environ.get("SPA_PROJECT_ROOT", Path.home() / "projects" / "spa"))
 
 
 def main():

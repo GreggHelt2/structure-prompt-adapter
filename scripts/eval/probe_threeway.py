@@ -19,7 +19,7 @@ Run (A5000):
     conda run -n spa-dev python scripts/eval/probe_threeway.py \
         variant=C_n_by_1536 hardware=local_a5000 \
         eval.ckpt=checkpoints/spa_C_last.pt \
-        eval.prompt_pdb=/home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb/AF-A0A522W419-F1-model_v4_esmfold_v1.pdb \
+        eval.prompt_pdb="$SPA_PROJECT_ROOT/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb/AF-A0A522W419-F1-model_v4_esmfold_v1.pdb" \
         eval.length=150 eval.num_designs=4 eval.lambda_scale=2.0 \
         eval.out_dir=./outputs/eval/probe_threeway
 """

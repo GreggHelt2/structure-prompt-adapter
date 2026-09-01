@@ -11,7 +11,7 @@ self-contained units joined by a thin linker; high ⇒ single domain (or a trivi
 cleaner. Pick the lowest-scoring structure + its boundary, then run the probe with eval.probe_boundary=b.
 
     conda run -n spa-dev python scripts/eval/domain_split.py \
-        --pdb-dir /home/user1/projects/spa/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb \
+        --pdb-dir "$SPA_PROJECT_ROOT/training_data/proteina-atomistica_data_vrelease/atomistica_data_release/pdb" \
         --uniprots A0A1F1QD24,A0A7C9GW19,A0A2G6NLK2,H1SDK8,W7QV56,A0A2W5NKK0,A0A1Q8BPK6,A0A536G7C3,A0A1X0IID6
 """
 
