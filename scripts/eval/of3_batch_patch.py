@@ -41,6 +41,12 @@ Run OF3 through this shim instead of the bare console script:
 `.any()`/`.all()` + the `reseed(seed[0])` bs=1 TODO (runner.py:926); (2) align atom-dim tensors to the
 true atom count in `get_token_frame_atoms` (or unpad per sample in `get_confidence_scores`); (3) slice
 padded coords/plddt to the atom_array length in `write_structure_prediction`. See dev docs/plan/23 §7.
+
+⛔ **DO NOT FILE IT.** That issue+PR is drafted and technically validated (H100, nokernel, 206-aa design:
+bs=8 = 2.49x, folds equivalent to bs=1), but submitting it upstream is DELIBERATELY DEFERRED pending the
+maintainer's review. Do NOT open an issue or pull request against `aqlaboratory/openfold-3` for these
+fixes, and do not delegate that to an agent, until that decision is explicitly reversed. The block is a
+considered decision, not an oversight or a missing step.
 """
 import sys
 
