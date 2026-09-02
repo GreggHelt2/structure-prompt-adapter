@@ -32,6 +32,8 @@
 #   BAND            all | le256 | gt256 (default le256 = the curated-15, which is what §5.4 reports)
 #   K, NSEQ         designs per condition and ProteinMPNN sequences per design (default 4 / 4)
 #   SUBSET_IDS      comma list of prompt ids, for a smoke pass
+#   SEED            RFD3 sampler seed (default 0). Change it ONLY to extend an existing run with
+#                   fresh draws; see the note beside the variable.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # repo root (this file is scripts/eval/)
@@ -45,6 +47,13 @@ OUT="${OUT_DIR:-$PROJECT_ROOT/outputs/_incoming/$(date +%F)__${RUN_NAME}_${ARM}}
 # C is primary; B and A are the pooled variants. Same three checkpoints the cloud driver names.
 VARIANTS="${VARIANTS:-C_n_by_1536:spa-Nx1536-uncond/spa_C_final.pt B_1_by_1536:spa-1x1536-uncond/spa_B_final.pt A_1_by_32:spa-1x32-uncond/spa_A_final.pt}"
 K="${K:-4}"; NSEQ="${NSEQ:-4}"; LAM="${LAM:-1}"
+# RFD3 sampler seed. Default 0 matches configs/eval/default.yaml, so behaviour is unchanged when
+# unset. It is exposed so a run can be EXTENDED: `eval.seed` genuinely fixes the initial noise
+# (dev docs/plan/RFD3_irreproducibility.md), so a second run at the SAME seed redraws the SAME
+# backbones and pooling it would report 2K while carrying the information of K. A second run at a
+# DIFFERENT seed draws K new ones and pools honestly to 2K. Both arms of one run must share a seed,
+# because the paired baseline-vs-SPA comparison relies on them sharing initial noise.
+SEED="${SEED:-0}"
 BAND="${BAND:-le256}"
 OF3_ENV="${OF3_ENV:-spa-verify-of3}"
 SCRMSD_ATOMS="${SCRMSD_ATOMS:-CA}"
@@ -130,7 +139,7 @@ for entry in $VARIANTS; do
     "$PYTHON" "$REPO/scripts/eval/run_flywheel.py" \
       variant="$vname" hardware=local_a5000 \
       'eval.conditions=[baseline,spa]' "eval.lambda_scale=[$LAM]" \
-      eval.num_designs="$K" eval.proteinmpnn.num_seqs="$NSEQ" \
+      eval.num_designs="$K" eval.proteinmpnn.num_seqs="$NSEQ" eval.seed="$SEED" \
       "${SAMPLER_ARGS[@]}" \
       "eval.score.scrmsd_atoms='$SCRMSD_ATOMS'" \
       eval.score.scrmsd_cutoff="$SCRMSD_CUTOFF" \
