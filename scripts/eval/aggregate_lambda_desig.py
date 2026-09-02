@@ -45,8 +45,16 @@ def main() -> None:
     scores: dict = defaultdict(lambda: defaultdict(list))
     prompts_seen: dict = defaultdict(set)
     n_json = 0
-    for jf in sorted(glob.glob(os.path.join(a.results_dir, a.variant, "*.json"))):
-        uid = os.path.splitext(os.path.basename(jf))[0]
+    # TWO layouts, because the cloud and local drivers write differently and only the cloud one was
+    # ever handled here. Cloud (`scripts/cloud/run_variant_desig.sh`) writes one flat `<uid>.json` per
+    # prompt; local (`scripts/eval/run_variant_desig_local.sh`, added later) writes
+    # `<uid>/flywheel_results.json`, the flywheel's own per-run directory. Accept both, so the local
+    # driver has a working aggregation path rather than silently reporting "0 prompts".
+    flat = glob.glob(os.path.join(a.results_dir, a.variant, "*.json"))
+    nested = glob.glob(os.path.join(a.results_dir, a.variant, "*", "flywheel_results.json"))
+    for jf in sorted(flat + nested):
+        uid = (os.path.basename(os.path.dirname(jf)) if os.path.basename(jf) == "flywheel_results.json"
+               else os.path.splitext(os.path.basename(jf))[0])
         fold = fold_of.get(uid)
         if fold is None:
             print(f"[warn] {uid} not in manifest — skipping")
