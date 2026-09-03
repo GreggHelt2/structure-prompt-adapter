@@ -358,6 +358,49 @@ def test_score_design_with_motif():
     assert ds_nomotif.motif_rmsd_refold is None
 
 
+def test_refold_side_adherence():
+    """Refold-side adherence exists, matches the design-side basis, and degrades with the refold.
+
+    dev plan/67 §7.8. The point of the metric is that the design-side TM is read BEFORE ProteinMPNN
+    runs, so it cannot answer whether the steer survives the round trip. Three properties pin it:
+    it is computed off the SAME best refold scRMSD selected, it uses the SAME tm_norm as its
+    design-side partner (so the two are comparable and their difference is meaningful), and a refold
+    that is a perturbed copy of the design scores no better against the prompt than the design does.
+    """
+    from types import SimpleNamespace
+
+    from spa.eval.score import score_design
+
+    coords = _backbone()
+    design = SimpleNamespace(
+        atom_array=_make_ca(coords), path="x/spa_design_0.pdb",
+        condition="spa", lambda_scale=1.0, n_residues=len(coords),
+    )
+    prompt = _make_ca(coords)                      # design == prompt, so design-side TM is ~1
+    refolds = [_make_ca(_perturb(coords, sigma=0.6))]
+    ds = score_design(design, prompt=prompt, refolds=refolds)
+
+    assert ds.tm_score_refold is not None
+    assert 0.0 <= ds.tm_score_refold <= 1.0
+    # both normalisations are filled, mirroring the design-side triple
+    assert ds.tm_norm_design_refold is not None and ds.tm_norm_prompt_refold is not None
+    # a perturbed refold cannot match the prompt better than the design, which IS the prompt here
+    assert ds.tm_score_refold <= ds.tm_score + 1e-9
+    # computed off the scRMSD-selected refold
+    assert ds.best_refold_idx == 0
+
+    # no refolds -> the refold-side triple stays None and nothing else changes
+    ds_norefold = score_design(design, prompt=prompt, refolds=None)
+    assert ds_norefold.tm_score is not None
+    assert ds_norefold.tm_score_refold is None
+    assert ds_norefold.tm_norm_design_refold is None and ds_norefold.tm_norm_prompt_refold is None
+
+    # no prompt -> nothing to score adherence against, on either side
+    ds_noprompt = score_design(design, prompt=None, refolds=refolds)
+    assert ds_noprompt.tm_score is None and ds_noprompt.tm_score_refold is None
+    assert ds_noprompt.scrmsd is not None          # designability is unaffected
+
+
 def test_aggregate_and_delta_motif():
     # Two conditions, both with the motif pinned (motif_rmsd ~0) -> satisfied rate 1.0 and
     # d_motif_rmsd_mean ≈ 0 (the hard pin is SPA-independent — the headline claim).

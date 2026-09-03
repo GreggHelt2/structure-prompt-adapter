@@ -165,6 +165,14 @@ class DesignScore:
     best_refold_idx: int | None = None
     plddt: float | None = None
     designable: bool | None = None
+    # refold-side ADHERENCE (dev plan/67 §7.8): the same TM as above, recomputed on the best refold
+    # rather than the design. Answers "does the fold-steer survive inverse folding?", which the
+    # design-side number cannot: it is read before ProteinMPNN ever runs. The refold-side motif
+    # metric below has always existed; this is its missing partner on the steering channel, and its
+    # absence meant the two conditioning channels were reported at different stages.
+    tm_score_refold: float | None = None
+    tm_norm_design_refold: float | None = None
+    tm_norm_prompt_refold: float | None = None
     # hard-motif satisfaction (Run-B hard⊕soft; dev 14 §3-§4) — all None when no motif was supplied
     motif_rmsd: float | None = None         # design-side: design backbone vs motif source, over the motif residues
     motif_rmsd_refold: float | None = None  # refold-side: best OF3 refold vs motif source (motif survival)
@@ -194,6 +202,7 @@ class ConditionSummary:
     tm: Distribution                        # adherence TM-score distribution
     prompt_rmsd: Distribution               # adherence Cα-RMSD distribution
     scrmsd: Distribution                    # best-of-K scRMSD distribution
+    tm_refold: Distribution = field(default_factory=lambda: Distribution(n=0))          # refold-side adherence TM (steer survival through OF3)
     motif_rmsd: Distribution = field(default_factory=lambda: Distribution(n=0))         # design-side motif Cα-RMSD (≈0 if the hard pin held; dev 14)
     motif_rmsd_refold: Distribution = field(default_factory=lambda: Distribution(n=0))  # refold-side motif Cα-RMSD (motif survival through OF3)
     motif_satisfied_rate: float | None = None  # fraction with design-side motif_rmsd < cutoff (None if no motif scored)
@@ -624,6 +633,21 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, c
         ds.designable = is_designable(
             res.scrmsd, plddt, scrmsd_cutoff=sc.scrmsd_cutoff, plddt_cutoff=sc.plddt_cutoff
         )
+        # Refold-side adherence (dev plan/67 §7.8). Same `adherence()` and the SAME `tm_norm`, so the
+        # pair (tm_score, tm_score_refold) is a like-for-like comparison and their difference is the
+        # steer lost through the round trip. Scored on the scRMSD-selected best refold, matching
+        # `motif_rmsd_refold` below; note that refold is chosen for reproducing the BACKBONE, not for
+        # matching the target, which is a property to state rather than to correct here.
+        # ⛔ Whole-design only. Regional steering needs slice TM, max-normalisation and a refolded
+        # baseline arm; see plan/67 §7.8a before extending this to a per-region number.
+        if prompt is not None and res.best_refold_idx is not None and res.best_refold_idx >= 0:
+            try:
+                adh_r = adherence(refolds[res.best_refold_idx], prompt, tm_norm=sc.tm_norm)
+                ds.tm_score_refold = adh_r.tm_score
+                ds.tm_norm_design_refold = adh_r.tm_norm_design
+                ds.tm_norm_prompt_refold = adh_r.tm_norm_prompt
+            except Exception as e:  # a length-mismatched or unparsable refold must not abort the run
+                print(f"[score] refold-side adherence failed for {name}: {e}")
 
     if motif is not None:
         atom_spec = None
@@ -755,6 +779,7 @@ def aggregate(scores, *, structs_by_name=None, cfg=None, score_cfg=None) -> list
             scrmsd=_distribution([s.scrmsd for s in items]),
             motif_rmsd=_distribution([s.motif_rmsd for s in items]),
             motif_rmsd_refold=_distribution([s.motif_rmsd_refold for s in items]),
+            tm_refold=_distribution([s.tm_score_refold for s in items]),
             motif_satisfied_rate=motif_satisfied_rate,
             diversity_tm=diversity_tm,
             novelty=None,
