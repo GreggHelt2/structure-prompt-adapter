@@ -34,6 +34,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .generate import generate
+from .gpu_lock import generation_lock
 from .proteinmpnn import inverse_fold
 from .score import aggregate, delta_vs_baseline, score_design
 
@@ -176,10 +177,17 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
     from .generate import _resolve_out_dir
 
     # Stage 1 — generate RFD3 ± SPA backbones.
-    designs = generate(cfg)
-    # The engine built inside generate() is unreachable now (run_flywheel passes none in, so nothing
-    # holds it), but its allocator arena is not. Release before Stage 3 hands the card to a subprocess.
-    release_gpu_memory("after Stage 1 (generate)")
+    # ⭐ Held under a cross-process lock: generation is the ~5x VRAM peak (16.3 GB at K=16/L=227 against
+    # 3.2 GB refolding), so two concurrent shards GENERATING cannot fit a 24 GB card while three
+    # refolding fit easily. Serializing only this stage removes the collision class at a bounded cost;
+    # staggering shard starts does not, because balanced shards stay in phase. See spa.eval.gpu_lock
+    # and dev plan/85 §4f. The lock is released before Stage 2, so refolding stays fully concurrent.
+    with generation_lock(label=str(_resolve_out_dir(cfg))):
+        designs = generate(cfg)
+        # The engine built inside generate() is unreachable now (run_flywheel passes none in, so
+        # nothing holds it), but its allocator arena is not. Release INSIDE the lock, so the next
+        # shard sees a card this process has already given back rather than one it is still holding.
+        release_gpu_memory("after Stage 1 (generate)")
 
     # Stage 2 — inverse-fold each backbone; key by design name (== PDB stem == SequenceSet.name).
     seqsets = inverse_fold(cfg, designs=designs)
