@@ -148,6 +148,56 @@ def describe_prompt(path_or_id, splits_root=None) -> dict[str, Any]:
     return rec
 
 
+def describe_conditioning(cfg) -> dict[str, Any] | None:
+    """What the run conditioned on, and ⭐ **what it did NOT isolate**, emitted automatically.
+
+    Exists because of this module's founding lesson: anything that depends on someone remembering does
+    not happen. The specific thing being remembered here is dev ``90`` §5.0b.
+
+    ⛔ **The disclosure.** RFdiffusion3 atomizes a ligand into the **same token track** SPA attends to,
+    one token per heavy atom, interleaved with the protein rather than appended
+    (``rfd3/transforms/pipelines.py:172-179``; dev ``90`` §3.1a). SPA's cross-attention query is the
+    full token tensor, so **with a uniform λ and no per-residue profile the adapter also steers the
+    ligand's tokens**, using a fold prompt that knows nothing about small molecules. That is a
+    deliberate, approved scope choice for the first runs (Gregg, 2026-09-03: route **(c)** of §5.0b,
+    "go with c for now, and note it in the run record") and **not** a defect. What it forecloses is
+    narrow and specific: such a run **cannot claim the ligand channel was isolated**.
+
+    Returns ``None`` when no ligand is configured, so ordinary monomer runs gain no field.
+    """
+    try:
+        ev = cfg.eval
+    except Exception:
+        return None
+
+    ligand = None
+    for getter in (lambda: (ev.get("specification") or {}).get("ligand", None),
+                   lambda: (ev.get("motif") or {}).get("ligand", None)):
+        try:
+            ligand = ligand or getter()
+        except Exception:
+            pass
+    if not ligand:
+        return None
+
+    rec: dict[str, Any] = {
+        "ligand": _plain(ligand),
+        "lambda_profile": "uniform (no per-residue profile set)",
+        "ligand_tokens_steered": True,
+        "isolation": "NOT ISOLATED",
+        "disclosure": (
+            "RFdiffusion3 atomizes the ligand into the same token track SPA attends to (one token per "
+            "heavy atom, interleaved). With a uniform lambda this run therefore applied the fold "
+            "prompt to the ligand's tokens as well as the protein's. This is route (c) of dev plan/90 "
+            "section 5.0b, chosen deliberately on 2026-09-03. CONSEQUENCE: this run may NOT be "
+            "described as isolating the ligand conditioning channel. The controlled arm needs the "
+            "token-level is_ligand mask wired into the profile builder (route (b), prerequisite P2)."
+        ),
+        "decided": "2026-09-03 (Gregg), dev plan/90 section 5.0b",
+    }
+    return rec
+
+
 def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
             extra: dict | None = None, started: str | None = None) -> dict[str, Any]:
     """Assemble the provenance record. Never raises."""
@@ -212,6 +262,21 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
             rec["anomalies"].append(f"config capture partial: {type(exc).__name__}: {exc}")
     elif prompts:
         rec["prompts"] = [describe_prompt(p) for p in prompts]
+
+    if cfg is not None:
+        try:
+            cond = describe_conditioning(cfg)
+            if cond:
+                rec["conditioning"] = cond
+                # Surfaced as an anomaly too, not because it is wrong, but because `anomalies` is the
+                # field a reader actually reads. A scope limit nobody notices is a scope limit that
+                # gets over-read later.
+                rec["anomalies"].append(
+                    "LIGAND TOKENS STEERED: uniform lambda applied to the ligand's own tokens; this "
+                    "run does NOT isolate the ligand channel (deliberate; dev plan/90 5.0b route c)."
+                )
+        except Exception as exc:
+            rec["anomalies"].append(f"conditioning capture failed: {type(exc).__name__}: {exc}")
 
     not_heldout = [p["id"] for p in rec.get("prompts", []) if p.get("split") not in (None, "test")]
     if not_heldout:
