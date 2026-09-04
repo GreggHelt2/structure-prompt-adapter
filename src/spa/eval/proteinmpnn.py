@@ -158,6 +158,7 @@ def _build_command(
     model_name: str,
     ca_only: bool,
     conda_env: str | None,
+    design_chains=None,
 ) -> list[str]:
     """Assemble the ``protein_mpnn_run.py`` argv (the exact Task-1.5 invocation; dev ``05`` Stage 2)."""
     cmd = [
@@ -172,6 +173,13 @@ def _build_command(
         "--path_to_model_weights", str(weights_dir),
         "--model_name", str(model_name),
     ]
+    # ⭐ Restrict design to named chains (dev ``90`` §2.1). With this unset ProteinMPNN sets
+    # `designed_chain_list = all_chain_list` and REDESIGNS EVERY CHAIN, including a target held fixed by
+    # RFdiffusion3, so a binder run would hand the refolder a target whose sequence it invented. Unset =>
+    # today's behaviour exactly, which is correct for a monomer.
+    if design_chains:
+        chains = design_chains if isinstance(design_chains, str) else " ".join(map(str, design_chains))
+        cmd += ["--pdb_path_chains", chains]
     if ca_only:
         cmd.append("--ca_only")
     if conda_env:  # run ProteinMPNN in its own conda env (dev 05 §4 cross-env handoff)
@@ -192,6 +200,7 @@ def run_proteinmpnn(
     model_name: str = "v_48_020",
     ca_only: bool = False,
     conda_env: str | None = None,
+    design_chains=None,
 ) -> SequenceSet:
     """Inverse-fold one backbone PDB → N designed sequences (the low-level Stage-2 worker).
 
@@ -221,6 +230,7 @@ def run_proteinmpnn(
         repo_dir=repo_dir, pdb_path=pdb_path, out_dir=out_dir, num_seqs=num_seqs,
         sampling_temp=sampling_temp, seed=seed, batch_size=batch_size,
         weights_dir=Path(weights_dir), model_name=model_name, ca_only=ca_only, conda_env=conda_env,
+        design_chains=design_chains,
     )
     proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ.copy())
     if proc.returncode != 0:
@@ -309,6 +319,10 @@ def inverse_fold(cfg, *, designs=None) -> list[SequenceSet]:
             model_name=str(pm.get("model_name", "v_48_020")),
             ca_only=bool(pm.get("ca_only", False)),
             conda_env=pm.get("conda_env"),
+            # `eval.proteinmpnn.design_chains: [A]` restricts design to the binder chain so a target
+            # held fixed by RFD3 is not silently redesigned (dev ``90`` §2.1). Unset => every chain,
+            # which is ProteinMPNN's own default and correct for a monomer.
+            design_chains=pm.get("design_chains"),
         )
         results.append(res)
         print(f"[inverse_fold] {res.name} -> {len(res.sequences)} seq(s) -> {res.fasta_path}")

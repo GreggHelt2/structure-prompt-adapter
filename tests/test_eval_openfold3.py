@@ -46,7 +46,14 @@ def test_query_json_schema(tmp_path):
     assert set(qj["queries"]) == {"q0", "q1"}
     chain = qj["queries"]["q0"]["chains"][0]
     assert chain == {"molecule_type": "protein", "chain_ids": ["A"], "sequence": "AAAA"}
-    assert qj["queries"]["q1"]["chains"][0]["sequence"] == "BBBB"  # '/' multi-chain sep removed
+    # ⛔ CORRECTED 2026-09-04. This line used to assert `== "BBBB"`, with the comment
+    # "'/' multi-chain sep removed", i.e. **the defect was pinned here as expected behaviour**.
+    # Deleting ProteinMPNN's chain separator fused a complex into one covalent chain, and because the
+    # residue count survived, `score.self_consistency`'s equal-length guard passed and scRMSD was
+    # computed against a chimera silently (dev ``90`` §2.1 item M2, demonstrated in ``results/42``).
+    # A two-chain sequence must now produce TWO chains.
+    assert [c["sequence"] for c in qj["queries"]["q1"]["chains"]] == ["BB", "BB"]
+    assert [c["chain_ids"] for c in qj["queries"]["q1"]["chains"]] == [["A"], ["B"]]
 
 
 def test_command_has_required_flags(tmp_path):

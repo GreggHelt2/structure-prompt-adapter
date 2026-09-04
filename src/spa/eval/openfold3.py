@@ -76,6 +76,8 @@ class OF3Refolder:
         cuda_visible_devices: str | None = None,
         use_msa_server: bool = False,
         batch_patch_shim: str | None = None,
+        ligand_ccd: str | None = None,
+        ligand_smiles: str | None = None,
     ) -> None:
         self.ckpt_path = str(ckpt_path)
         self.runner_yaml = str(runner_yaml)
@@ -90,16 +92,47 @@ class OF3Refolder:
         # script — the shim monkeypatches OF3's 3 bs=1 guards so a runner-yaml with
         # data_module_args.batch_size>1 works for same-length batches (dev 23; scripts/eval/of3_batch_patch.py).
         self.batch_patch_shim = str(batch_patch_shim) if batch_patch_shim else None
+        # Ligand for the refold query (dev ``90`` §3.1 L2). Both None => no ligand chain is emitted and
+        # every query is byte-identical to before this existed. `ligand_smiles` wins if both are given.
+        self.ligand_ccd = str(ligand_ccd) if ligand_ccd else None
+        self.ligand_smiles = str(ligand_smiles) if ligand_smiles else None
 
     # ----------------------------------------------------------------------------------------------
     # Query JSON + command assembly + output-path reconstruction
     # ----------------------------------------------------------------------------------------------
 
-    @staticmethod
-    def _chain(seq) -> dict:
-        """One single-chain protein query body (cleaned sequence; drop ProteinMPNN '/' chain seps)."""
-        clean = str(seq).replace("/", "").strip()
-        return {"chains": [{"molecule_type": "protein", "chain_ids": ["A"], "sequence": clean}]}
+    #: Chain ids handed to OF3, in ProteinMPNN's own chain order.
+    _CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    def _chain(self, seq) -> dict:
+        """One query body: **one OF3 chain per ProteinMPNN chain**, plus any configured ligand.
+
+        ⛔ **This used to do ``str(seq).replace("/", "")``, which was silently WRONG for a complex.**
+        ProteinMPNN separates chains with ``/``; deleting it fused them into a single covalent chain, and
+        because the total residue count was preserved, ``score.self_consistency``'s equal-length guard
+        **passed** and scRMSD was computed against a chimera with no error, no warning and no NaN. Every
+        complex would have come back systematically non-designable for a reason invisible in the output
+        (dev ``90`` §2.1 item M2). A monomer has no ``/``, so its query is byte-identical to before.
+
+        ⭐ **Ligand.** When :attr:`ligand_ccd` is set, a ``molecule_type: "ligand"`` chain is appended
+        using OF3's own schema (``ccd_codes``, or ``smiles`` via :attr:`ligand_smiles`), so the refold
+        oracle sees the same small molecule RFdiffusion3 designed around (dev ``90`` §3.1 item L2).
+        Without it the ligand is absent from the refold and self-consistency silently scores an
+        apo prediction against a holo design.
+        """
+        parts = [p.strip() for p in str(seq).split("/") if p.strip()]
+        if len(parts) > len(self._CHAIN_IDS):
+            raise ValueError(f"refold: {len(parts)} chains exceeds the {len(self._CHAIN_IDS)} ids available")
+        chains = [{"molecule_type": "protein", "chain_ids": [self._CHAIN_IDS[i]], "sequence": p}
+                  for i, p in enumerate(parts)]
+        if self.ligand_ccd or self.ligand_smiles:
+            lig = {"molecule_type": "ligand", "chain_ids": [self._CHAIN_IDS[len(parts)]]}
+            if self.ligand_smiles:
+                lig["smiles"] = str(self.ligand_smiles)
+            else:
+                lig["ccd_codes"] = str(self.ligand_ccd)
+            chains.append(lig)
+        return {"chains": chains}
 
     def _build_query_json(self, sequences: list[str]) -> dict:
         """One single-chain protein query per sequence, keyed ``q{i}`` (dev ``05`` schema)."""
@@ -176,7 +209,7 @@ class OF3Refolder:
             print(f"[of3] {name}: no sequences to refold -> skipping.")
             return []
         run_dir = self.out_dir / "of3" / name
-        self._run_openfold({"queries": {f"q{i}": self._chain(s) for i, s in enumerate(sequences)}}, run_dir)
+        self._run_openfold(self._build_query_json(sequences), run_dir)
         refolds: list[str] = []
         missing = 0
         for i in range(len(sequences)):
