@@ -260,6 +260,32 @@ def resolve_engine_overrides(ev) -> dict:
     return out
 
 
+def resolve_specification(ev) -> dict:
+    """``eval.specification`` as a **fully plain** dict, nested mappings included.
+
+    ⚠️ **``dict(cfg.eval.specification)`` is not enough and this is not a style point.** It is shallow:
+    top-level keys become a plain dict while any NESTED mapping stays an ``omegaconf.DictConfig``, and
+    RFD3's selection validator declares it accepts ``str | bool | dict | None``
+    (``InputSelection.from_any``, ``rfd3/inference/parsing.py:44``), so it rejects the container with
+    ``Cannot convert <class 'omegaconf.dictconfig.DictConfig'> to InputSelection``.
+
+    ⛔ **Measured 2026-09-04**: every binder cell carrying ``select_hotspots`` and every diffused-ligand
+    cell carrying ``select_fixed_atoms`` failed this way. So ``eval.specification`` could carry scalars
+    but **not any selection dict**, which is exactly what a multi-chain binder or a diffused ligand
+    needs. The dev estimate's claim that this surface was "passed through verbatim, so fully open" was
+    true of the passing-through and wrong about the openness (dev ``90`` §3a).
+
+    ⭐ **``build_motif`` already guarded its own ``fixed_atoms`` against this same validator.** The guard
+    simply never reached the parallel path, and nothing exercised it. Keep both in step.
+    """
+    from omegaconf import OmegaConf
+
+    raw = ev.get("specification")
+    if OmegaConf.is_config(raw):
+        return dict(OmegaConf.to_container(raw, resolve=True) or {})
+    return dict(raw or {})
+
+
 def build_eval_engine(cfg):
     """Build + initialize the RFD3 inference engine for generation (loads frozen host weights).
 
@@ -282,7 +308,14 @@ def build_eval_engine(cfg):
     from rfd3.engine import RFD3InferenceConfig, RFD3InferenceEngine
 
     ev = cfg.eval
-    spec = dict(ev.get("specification") or {})
+    # ⚠️ `dict()` alone is NOT enough: it is shallow, so a NESTED mapping (select_hotspots,
+    # select_fixed_atoms, select_buried, cif_parser_args) stays an OmegaConf DictConfig and RFD3's
+    # before-validator rejects it with "Cannot convert <class 'omegaconf.dictconfig.DictConfig'> to
+    # InputSelection" (input_parsing.py InputSelection.from_any). Measured 2026-09-04: every binder
+    # cell carrying `select_hotspots` and every diffused-ligand cell carrying `select_fixed_atoms`
+    # failed this way. `build_motif` already guards its own `fixed_atoms` for exactly this reason;
+    # this path did not, which made `eval.specification` unable to carry any selection dict.
+    spec = resolve_specification(ev)
     if ev.get("length") is not None:
         spec.setdefault("length", int(ev.length))
     sampler = resolve_sampler_overrides(ev)
