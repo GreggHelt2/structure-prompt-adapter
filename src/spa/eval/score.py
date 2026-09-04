@@ -270,6 +270,82 @@ def _ca_array(struct):
     return arr[arr.atom_name == "CA"]
 
 
+# --------------------------------------------------------------------------------------------------
+# Selection helpers for the multimer / protein-ligand runs (dev ``90`` §5.0a, items P1 + P3).
+#
+# ⛔ DELIBERATELY NOT FOLDED INTO ``_ca_array``, and please do not "tidy" them into it.
+# ``_ca_array`` is the single entry point for EVERY metric in this module (tm_score, ca_rmsd,
+# adherence, motif_rmsd, source_positions, pairwise_tm_diversity, self_consistency, the design-index
+# helpers) and for ``scripts/eval/domain_split.py``. Every historical number in ``docs/results/`` was
+# produced through it. Adding a filter there, even a default-off one, puts a branch in the hottest
+# correctness path in the project for the benefit of two experiments that have not run yet.
+#
+# Instead these RETURN A FILTERED AtomArray, and ``_as_struct`` passes an AtomArray straight through
+# (see above), so a caller writes ``adherence(polymer_only(design), prompt)`` and every existing
+# function is reached completely unmodified. Nothing on any historical path changes by construction.
+# --------------------------------------------------------------------------------------------------
+
+
+def polymer_only(struct):
+    """Drop non-amino-acid residues (ligands, ions, waters), keeping MODIFIED residues.
+
+    ⚠️ **The obvious implementation is wrong and was measured to be wrong.** Filtering on biotite's
+    ``hetero`` flag deletes **selenomethionine (MSE) and phosphoserine (SEP)**, which are genuine
+    residues carrying genuine Cα atoms and are common in crystal structures. Verified against the
+    installed biotite: on a array of GLY/MSE/SEP plus a Ca²⁺ ion, ``~hetero`` keeps **only GLY**.
+    ``filter_amino_acids`` keeps GLY, MSE and SEP and drops the ion, which is the intended behaviour.
+
+    ⭐ **Why this exists at all.** ``_ca_array`` selects on ``atom_name == "CA"``, and a **calcium ion's
+    atom name is literally** ``CA``. So a Ca²⁺ cofactor is silently counted as a residue Cα by every
+    backbone metric, shifting each later design index by one (dev ``90`` §3.1). Any run whose input
+    carries a ligand or an ion should be filtered through here first.
+
+    Args:
+        struct: anything :func:`_as_struct` accepts.
+
+    Returns:
+        ``AtomArray`` of amino-acid residues only. Pass it straight to any scorer in this module.
+    """
+    from biotite.structure import filter_amino_acids
+
+    arr = _as_struct(struct)
+    return arr[filter_amino_acids(arr)]
+
+
+def select_chains(struct, chains):
+    """Restrict a structure to the named chain(s), so per-chain scoring needs no new scorer.
+
+    ⭐ **Why this exists.** ``_ca_array`` groups nothing by chain: a complex becomes one concatenated
+    Cα array, and ``tmtools.tm_align`` then scores two chains as a single sequential polypeptide,
+    silently (dev ``90`` §2.1, item M3). ``tmtools`` exposes no chain argument and no MM-align, so
+    chain-permutation-aware TM is not reachable through the current dependency. **Scoring one chain at
+    a time is therefore the correct move, not a workaround**: for the fixed-partner binder shape the
+    question is about the steered chain against its prompt, which is exactly a single-chain comparison.
+
+    Args:
+        struct: anything :func:`_as_struct` accepts.
+        chains: one chain id, or an iterable of them.
+
+    Returns:
+        ``AtomArray`` restricted to those chains.
+
+    Raises:
+        ValueError: if any requested chain is absent. A silently empty selection would score a design
+            that does not contain the chain as perfect.
+    """
+    import numpy as np
+
+    arr = _as_struct(struct)
+    want = [str(chains)] if isinstance(chains, str) else [str(c) for c in chains]
+    present = set(map(str, arr.chain_id))
+    missing = [c for c in want if c not in present]
+    if missing:
+        raise ValueError(
+            f"select_chains: chain(s) {missing} absent; present chains are {sorted(present)}"
+        )
+    return arr[np.isin(arr.chain_id, want)]
+
+
 def _backbone_array(struct):
     """The N, CA, C backbone ``AtomArray``, ordered canonically within each residue.
 

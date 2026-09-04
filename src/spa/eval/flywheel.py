@@ -190,8 +190,27 @@ def run_flywheel(cfg, *, refolder=None) -> dict:
         release_gpu_memory("after Stage 1 (generate)")
 
     # Stage 2 — inverse-fold each backbone; key by design name (== PDB stem == SequenceSet.name).
-    seqsets = inverse_fold(cfg, designs=designs)
-    release_gpu_memory("after Stage 2 (inverse fold)")
+    #
+    # ⭐ Skippable, because Stage 2 exists ONLY to feed Stage 3. This call used to be unconditional and
+    # ran *before* the refolder was even resolved below, so an adherence-only run (refolder unset) still
+    # paid ProteinMPNN for sequences nothing ever folded: measured at ~3.8% of a full run's wall-clock
+    # against generation's 5.7%, i.e. **~1.67x the necessary time** for adherence-only (dev ``85`` §2,
+    # corrected there 2026-09-03; dev ``90`` §5.0a item P6). Default is `true` so behaviour is
+    # byte-identical to before this existed; set `eval.flywheel.inverse_fold=false` for a tier-1 run.
+    #
+    # ⚠️ Deliberately NOT auto-skipped when `refolder is None`. Two existing callers pass a refolder in
+    # as an argument rather than via config, and one aggregate reads the FASTAs on their own, so
+    # inferring intent from the refolder would silently change what those runs produce. The knob is
+    # explicit for that reason.
+    fcfg = cfg.eval.get("flywheel") or {}
+    do_inverse_fold = bool(fcfg.get("inverse_fold", True))
+    if do_inverse_fold:
+        seqsets = inverse_fold(cfg, designs=designs)
+        release_gpu_memory("after Stage 2 (inverse fold)")
+    else:
+        print("[flywheel] eval.flywheel.inverse_fold=false -> skipping Stage 2 (ProteinMPNN). "
+              "Designability is unreachable without it; scoring adherence + geometry only.")
+        seqsets = []
     seqsets_by_name = {ss.name: ss for ss in seqsets}
 
     # Stage 3 — refold (OF3): pluggable + stubbed.

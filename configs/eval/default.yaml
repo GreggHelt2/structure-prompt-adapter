@@ -105,6 +105,11 @@ score:
 # scoring is adherence-only. Reuses eval.conditions/lambda_scale/num_designs (Stage 1), proteinmpnn
 # (Stage 2), and score (Stage 4) above — only the two flywheel-specific knobs live here.
 flywheel:
+  # Stage 2 (ProteinMPNN) exists only to feed Stage 3 (OF3). true (default) = today's behaviour exactly.
+  # Set false for a TIER-1 / adherence-only run: Stage 2 used to run even with refolder=null, paying
+  # ProteinMPNN for sequences nothing folds (~1.67x the necessary wall-clock; dev plan/85 §2, plan/90
+  # §5.0a P6). Designability is unreachable with this false, which is the point.
+  inverse_fold: true
   prompt_struct: null     # structure file to score prompt-adherence against; null -> eval.prompt_pdb
                           #   (eval.prompt_cache is an ESM3 tensor, not a structure, so it cannot serve here)
   refolder: null          # OF3 refolder (a Hydra _target_ spec satisfying score.Refolder); null -> skip
