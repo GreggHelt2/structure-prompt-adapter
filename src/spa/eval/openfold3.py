@@ -260,3 +260,103 @@ class OF3Refolder:
             self._surface_missing(run_dir, expected - total)
         print(f"[of3] refold_all: {total} refold(s) for {len(sets)} backbone(s) in ONE run -> {run_dir}")
         return out
+
+
+# ------------------------------------------------------------------------------------------------
+# Confidence outputs (dev ``90`` §5.0l step 1)
+# ------------------------------------------------------------------------------------------------
+#
+# ⛔ **OF3 has always written confidence and this module has always thrown it away.** Beside every
+# ``*_model.cif`` OF3 writes two more files, and until 2026-09-04 nothing in this project opened
+# either:
+#
+#   ``*_confidences_aggregated.json``  scalars + per-chain dicts: ``iptm``, ``ptm``, ``chain_ptm``,
+#                                     ``chain_pair_iptm``, ``bespoke_iptm``, ``avg_plddt``,
+#                                     ``has_clash``, ``sample_ranking_score``, ``disorder``, ``gpde``
+#   ``*_confidences.json``            the matrices: ``pae`` and ``pde`` (token x token) and per-atom
+#                                     ``plddt``
+#
+# ⭐ **Why it matters.** ``score.is_designable`` accepts a pLDDT gate that has never fired anywhere in
+# this project, because no caller could supply a pLDDT. More importantly, RFdiffusion3's own
+# multimeric-binder criterion is *confidence-gated* (interface minimum pAE, binder pTM, target-aligned
+# RMSD; dev ``90`` §3a), so a criterion shaped like theirs was uncomputable from our artifacts even
+# though the inputs were on disk the whole time. Same defect class as the silent chain fusion
+# (dev ``90`` §2.1 M2): the capability was present and nothing read it.
+#
+# ⚠️ **This is a READER, not a criterion.** Nothing here changes ``is_designable``, ``self_consistency``
+# or any number already reported. It only makes the confidence available to callers that ask.
+#
+# ⚠️ **OF3 is not AlphaFold3.** Reading ipTM and pAE from OF3 does not make our numbers comparable to
+# RFdiffusion3's published ones, which are AlphaFold3 quantities (dev ``90`` §3a). It makes an
+# *internally* consistent confidence-gated criterion possible, applied to both arms of our own runs.
+
+
+def confidence_paths(cif_path) -> tuple[Path, Path]:
+    """``(aggregated_json, full_json)`` beside a refold cif. Neither is checked for existence."""
+    cif = Path(str(cif_path))
+    stem = cif.name
+    for suffix in (".cif.gz", ".cif", ".pdb"):
+        if stem.endswith("_model" + suffix):
+            stem = stem[: -len("_model" + suffix)]
+            break
+    else:
+        stem = cif.stem.replace("_model", "")
+    return (cif.parent / f"{stem}_confidences_aggregated.json",
+            cif.parent / f"{stem}_confidences.json")
+
+
+def read_confidence(cif_path, *, with_matrices: bool = False) -> dict | None:
+    """Confidence scalars for one refold, or ``None`` when OF3 wrote none.
+
+    Returns the aggregated JSON as-is (``iptm``, ``ptm``, ``chain_ptm``, ``chain_pair_iptm``,
+    ``avg_plddt``, ``has_clash``, ...). With ``with_matrices=True`` the token-level ``pae`` / ``pde``
+    and per-atom ``plddt`` are merged in under their own keys, which is a much larger read (a 215-token
+    complex carries a 215x215 ``pae``), so it is off by default.
+    """
+    agg_p, full_p = confidence_paths(cif_path)
+    if not agg_p.exists():
+        return None
+    with open(agg_p) as fh:
+        out = dict(json.load(fh))
+    if with_matrices and full_p.exists():
+        with open(full_p) as fh:
+            out.update(json.load(fh))
+    return out
+
+
+def interface_pae(pae, chain_sizes) -> dict:
+    """Cross-chain pAE summaries for a two-chain complex, from the token-level ``pae`` matrix.
+
+    ``chain_sizes`` is the token count per chain **in the order OF3 emitted them**, which for our
+    complex refolds is ``[len(designed), len(target)]`` because :meth:`OF3Refolder._chain` assigns
+    chain ids A, B, ... in ProteinMPNN's own chain order. For an all-protein complex a token is a
+    residue, so Ca counts per chain are the right sizes; a ligand contributes per-atom tokens and must
+    be counted as such.
+
+    Returns ``min``, ``mean`` and ``median`` over the union of the two off-diagonal blocks, plus
+    ``min_ab`` / ``min_ba`` for the individual directions (pAE is not symmetric: entry ``(i, j)`` is
+    the expected error at token ``i`` when the prediction is aligned on token ``j``).
+
+    ⭐ **Which one is RFdiffusion3's.** Their gate is the interface **minimum** pAE at 1.5 A
+    (dev ``90`` §3a), which is a permissive statistic over thousands of pairs. The binder-design
+    literature more often gates a cross-chain **mean**, so both are returned and any report must name
+    which it used (`WORKING_AGREEMENTS` §2.7).
+    """
+    if not pae or len(chain_sizes) < 2:
+        return {}
+    n_a = int(chain_sizes[0])
+    n_ab = n_a + int(chain_sizes[1])
+    ab = [v for row in pae[:n_a] for v in row[n_a:n_ab]]
+    ba = [v for row in pae[n_a:n_ab] for v in row[:n_a]]
+    both = ab + ba
+    if not both:
+        return {}
+    s = sorted(both)
+    return {
+        "min": float(min(both)),
+        "mean": float(sum(both) / len(both)),
+        "median": float(s[len(s) // 2]),
+        "min_ab": float(min(ab)) if ab else float("nan"),
+        "min_ba": float(min(ba)) if ba else float("nan"),
+        "n_pairs": len(both),
+    }
