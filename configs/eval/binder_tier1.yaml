@@ -1,4 +1,9 @@
 # @package eval
+# ⚠️ NAMING: this is the MULTIMERIC BINDER task (one designed chain against a fixed PROTEIN
+# target), NOT the protein-ligand one. The filename predates the naming rule in dev
+# WORKING_AGREEMENTS §2.8 and is kept because run artifacts already carry it; the PROSE
+# everywhere says "multimeric binder". RFD3's own examples are `sm_binder_design.json` and
+# `protein_binder_design.json`, which is where the ambiguity comes from.
 # Run 2, MULTIMER binder at tier 1 (dev plan/90 §5.0/§5.2). RFD3's OWN PD-L1 target
 # (docs/examples/protein_binder_design.json), config REBUILT rather than inherited (dev plan/90 §3a):
 #   - binder length PINNED at 100 (the example's "50-120" range leaves a λ profile undefined)
