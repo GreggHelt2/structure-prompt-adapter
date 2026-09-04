@@ -685,6 +685,246 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, c
 # --------------------------------------------------------------------------------------------------
 # Diversity (pairwise TM among the designable set) + novelty stub (dev 05 §3)
 # --------------------------------------------------------------------------------------------------
+# Tier-1 structural metrics for the multimer / protein-ligand runs (dev ``90`` §5.0a, items P4 + P5).
+#
+# ⭐ These are deliberately REFOLD-FREE: both are geometry on the generated backbone, so they cost
+# nothing beyond generation and can gate the expensive designability tier (dev ``90`` §5.1). Neither
+# is called by any existing path — every function below is additive, so all historical numbers are
+# byte-identical.
+# --------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class LigandPocket:
+    """Ligand-pocket geometry for one design (dev ``90`` §5.0a P4; Run 1's tier-1 metric).
+
+    RFdiffusion3 holds a supplied ligand's coordinates fixed, so the ligand does not move between the
+    reference and the design: what can move is the protein around it. Both fields below therefore measure
+    the *protein's* placement relative to a common ligand.
+
+    Attributes:
+        n_clash: count of **non-motif backbone atoms (N, CA, C) within ``clash_cutoff`` of the nearest
+            ligand atom**. This is RFdiffusion3's own AME-benchmark clash definition (RFD3 supplementary
+            §3.5), reused verbatim so the number is comparable to a published criterion rather than
+            invented here.
+        min_dist: smallest distance (Å) from any protein backbone atom to any ligand atom.
+        motif_dists: per-motif-atom distance (Å) to the **nearest ligand atom**, in the order the atoms
+            were given. Empty when no motif atoms were supplied.
+        motif_dist_rmsd: RMSD (Å) between ``motif_dists`` and the same distances measured on a reference
+            structure, or ``None`` when no reference was given. **This is the pocket-preservation
+            number**: 0 means the motif sits exactly as far from the ligand as it natively does.
+        n_ligand_atoms: ligand atom count actually found.
+    """
+
+    n_clash: int
+    min_dist: float
+    motif_dists: list[float] = field(default_factory=list)
+    motif_dist_rmsd: float | None = None
+    n_ligand_atoms: int = 0
+
+
+@dataclass
+class InterfaceGeometry:
+    """Inter-chain interface geometry for one design (dev ``90`` §5.0a P5; Run 2's tier-1 metric).
+
+    Written for the **fixed-partner binder** shape (dev ``90`` §5.2): the partner chain is revealed from
+    the input and held by RFdiffusion3, so it is identical between reference and design, and the steered
+    chain is the only thing that can move. That is what makes ``rmsd`` well defined without a refold.
+
+    Attributes:
+        n_contacts: count of cross-chain Cα pairs within ``cutoff`` Å.
+        n_interface_a: residues of the steered chain participating in at least one contact.
+        n_interface_b: residues of the partner chain participating in at least one contact.
+        rmsd: Cα RMSD (Å) of the **steered chain's interface residues**, after superposing on the
+            **partner** chain, or ``None`` when no reference was given. Superposing on the partner is
+            what makes this measure interface displacement rather than whole-complex drift.
+        frac_retained: ``n_contacts`` as a fraction of the reference's, or ``None`` without a reference.
+            **This is the headline preservation number**; 1.0 means the interface is fully retained.
+    """
+
+    n_contacts: int
+    n_interface_a: int
+    n_interface_b: int
+    rmsd: float | None = None
+    frac_retained: float | None = None
+
+
+def _ligand_atoms(struct, ligand_names):
+    """Atoms of the named ligand residues. Raises if a requested name is absent (never silently empty)."""
+    import numpy as np
+
+    arr = _as_struct(struct)
+    names = [str(n).strip() for n in (
+        ligand_names.split(",") if isinstance(ligand_names, str) else ligand_names) if str(n).strip()]
+    if not names:
+        raise ValueError("ligand_pocket: no ligand residue names given")
+    mask = np.zeros(len(arr), dtype=bool)
+    for name in names:
+        hit = arr.res_name == name
+        if not hit.any():
+            raise ValueError(
+                f"ligand_pocket: ligand {name!r} absent from structure "
+                f"(present res_names include {sorted(set(map(str, arr.res_name)))[:12]})"
+            )
+        mask |= hit
+    return arr[mask]
+
+
+def ligand_pocket(design_struct, ligand_names, *, motif_atoms=None, reference=None,
+                  clash_cutoff: float = 1.5) -> LigandPocket:
+    """Ligand-pocket geometry for one design, refold-free (dev ``90`` §5.0a P4).
+
+    Args:
+        design_struct: the generated structure, ligand included.
+        ligand_names: residue name(s) of the ligand, e.g. ``"IAI"`` or ``"NAI,ACT"`` (the same string
+            RFdiffusion3's ``ligand`` spec key takes), or a list of names.
+        motif_atoms: optional ``[(chain, resid, atom_name), ...]`` for the pinned motif atoms whose
+            distance to the ligand is the pocket-preservation signal. Typically the same atoms
+            ``eval.motif.fixed_atoms`` pinned, so the metric scores what the model actually held.
+        reference: optional structure (the native holo complex) to compare ``motif_dists`` against.
+            Must expose the same motif atoms and the same ligand.
+        clash_cutoff: Å, RFdiffusion3's AME value (1.5) by default.
+
+    Returns:
+        :class:`LigandPocket`.
+
+    Raises:
+        ValueError: if the ligand or any requested motif atom is absent. A missing atom must surface;
+            a silently empty selection would score a broken design as perfect.
+    """
+    import numpy as np
+
+    lig = _ligand_atoms(design_struct, ligand_names)
+    lig_xyz = np.asarray(lig.coord, dtype="float64")
+
+    bb = _as_struct(design_struct)
+    bb = bb[np.isin(bb.atom_name, ("N", "CA", "C"))]
+    bb_xyz = np.asarray(bb.coord, dtype="float64")
+
+    if len(bb_xyz) == 0 or len(lig_xyz) == 0:
+        raise ValueError("ligand_pocket: design has no backbone atoms or no ligand atoms")
+
+    d = np.linalg.norm(bb_xyz[:, None, :] - lig_xyz[None, :, :], axis=-1)   # [n_bb, n_lig]
+    per_bb_min = d.min(axis=1)
+
+    motif_keys = set()
+    if motif_atoms:
+        motif_keys = {(str(c), int(r)) for (c, r, _a) in motif_atoms}
+    if motif_keys:
+        is_motif = np.array([(str(c), int(r)) in motif_keys
+                             for c, r in zip(bb.chain_id, bb.res_id)], dtype=bool)
+    else:
+        is_motif = np.zeros(len(bb), dtype=bool)
+
+    n_clash = int((per_bb_min[~is_motif] < float(clash_cutoff)).sum())
+
+    def _motif_dists(struct):
+        lg = np.asarray(_ligand_atoms(struct, ligand_names).coord, dtype="float64")
+        out = []
+        for chain, resid, atom in motif_atoms:
+            xyz = _residue_atom_coords(struct, chain, resid, [atom])[0]
+            out.append(float(np.linalg.norm(lg - xyz[None, :], axis=-1).min()))
+        return out
+
+    dists = _motif_dists(design_struct) if motif_atoms else []
+    rmsd = None
+    if motif_atoms and reference is not None:
+        ref = _motif_dists(reference)
+        a, b = np.asarray(dists), np.asarray(ref)
+        rmsd = float(np.sqrt(((a - b) ** 2).mean()))
+
+    return LigandPocket(
+        n_clash=n_clash,
+        min_dist=float(per_bb_min.min()),
+        motif_dists=dists,
+        motif_dist_rmsd=rmsd,
+        n_ligand_atoms=int(len(lig_xyz)),
+    )
+
+
+def interface_geometry(design_struct, chain_a, chain_b, *, reference=None,
+                       cutoff: float = 8.0) -> InterfaceGeometry:
+    """Inter-chain interface geometry for one design, refold-free (dev ``90`` §5.0a P5).
+
+    Args:
+        design_struct: the generated complex.
+        chain_a: the **steered** chain id (the one SPA conditions).
+        chain_b: the **partner** chain id (revealed from the input, held fixed by RFdiffusion3).
+        reference: optional structure to compare against, normally the λ=0 design from the same seed.
+            Supplies ``frac_retained`` and ``rmsd``.
+        cutoff: Å for a cross-chain Cα contact; 8.0 matches ``scripts/eval/domain_split.py``, which is
+            the only contact convention already in this repo.
+
+    Returns:
+        :class:`InterfaceGeometry`.
+
+    Raises:
+        ValueError: if either chain is absent, or if a reference is given whose partner chain does not
+            match the design's residue-for-residue. That mismatch means the partner was **not** held
+            fixed, which invalidates the superposition this metric depends on.
+    """
+    import numpy as np
+
+    def _chains(struct):
+        ca = _ca_array(struct)
+        a = ca[ca.chain_id == str(chain_a)]
+        b = ca[ca.chain_id == str(chain_b)]
+        if len(a) == 0 or len(b) == 0:
+            raise ValueError(
+                f"interface_geometry: chain {chain_a!r} has {len(a)} Cα and chain {chain_b!r} has "
+                f"{len(b)}; present chains are {sorted(set(map(str, ca.chain_id)))}"
+            )
+        return a, b
+
+    def _contacts(struct):
+        a, b = _chains(struct)
+        xa = np.asarray(a.coord, dtype="float64")
+        xb = np.asarray(b.coord, dtype="float64")
+        d = np.linalg.norm(xa[:, None, :] - xb[None, :, :], axis=-1)
+        hit = d < float(cutoff)
+        return a, b, hit
+
+    a, b, hit = _contacts(design_struct)
+    n_contacts = int(hit.sum())
+    iface_a = np.flatnonzero(hit.any(axis=1))
+    iface_b = np.flatnonzero(hit.any(axis=0))
+
+    rmsd = None
+    frac = None
+    if reference is not None:
+        ra, rb, rhit = _contacts(reference)
+        if len(rb) != len(b):
+            raise ValueError(
+                f"interface_geometry: partner chain {chain_b!r} has {len(b)} Cα in the design and "
+                f"{len(rb)} in the reference. The partner must be held fixed for this metric to mean "
+                "anything."
+            )
+        n_ref = int(rhit.sum())
+        frac = (float(n_contacts) / n_ref) if n_ref else None
+        if len(ra) == len(a) and len(iface_a) >= 3:
+            # Superpose on the PARTNER, then measure the steered chain's interface residues, so the
+            # number is interface displacement rather than whole-complex drift.
+            xb_d = np.asarray(b.coord, dtype="float64")
+            xb_r = np.asarray(rb.coord, dtype="float64")
+            cd, cr = xb_d.mean(axis=0), xb_r.mean(axis=0)
+            u, _, vt = np.linalg.svd((xb_d - cd).T @ (xb_r - cr))
+            sign = np.sign(np.linalg.det(u @ vt))
+            rot = u @ np.diag([1.0, 1.0, sign]) @ vt
+            xa_d = (np.asarray(a.coord, dtype="float64") - cd) @ rot
+            xa_r = np.asarray(ra.coord, dtype="float64") - cr
+            diff = xa_d[iface_a] - xa_r[iface_a]
+            rmsd = float(np.sqrt((diff ** 2).sum(axis=1).mean()))
+
+    return InterfaceGeometry(
+        n_contacts=n_contacts,
+        n_interface_a=int(len(iface_a)),
+        n_interface_b=int(len(iface_b)),
+        rmsd=rmsd,
+        frac_retained=frac,
+    )
+
+
+# --------------------------------------------------------------------------------------------------
 
 
 def pairwise_tm_diversity(structs) -> float | None:
