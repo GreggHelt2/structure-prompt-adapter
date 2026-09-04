@@ -1,0 +1,26 @@
+# @package eval
+# Run 1b, PROTEIN-LIGAND with a DIFFUSED ligand, tier 1 (dev plan/90 §5.0h).
+#
+# The companion to ligand_tier1.yaml. RFD3 benchmarks two ligand settings (supp. §3.4): FIXED uses the
+# exact input coordinates so the ligand is a rigid motif and its centre of mass initialises the noise,
+# and DIFFUSED gives the model no explicit coordinates so it must PLACE the ligand as well as build
+# around it. `select_fixed_atoms: {IAI: ""}` selects no atoms for IAI, which UNFIXES it.
+#
+# ⚠️ This is the HARDER arm and it weakens attribution on purpose. With the ligand free, both the
+# protein and the ligand can move, so a change is no longer attributable to the fold prompt alone.
+# Run it as a deliberate second step, never as the first test of channel interaction.
+#
+# ⛔ `score.ligand_pocket`'s motif_dist_rmsd assumes a COMMON ligand placement between design and
+# reference. That assumption does not hold here, so on this arm read n_clash and min_dist (which need
+# no reference) and do NOT read motif_dist_rmsd as pocket preservation.
+#
+# ⚠️ Differs from RFD3's own diffused arm in one way worth stating: their Fig. 3c pairs a diffused
+# ligand with RASA conditioning. This config omits RASA, because that would add a THIRD conditioning
+# channel to a two-channel question.
+defaults:
+  - ligand_tier1
+  - _self_
+
+specification:
+  select_fixed_atoms:
+    IAI: ""                        # select no atoms for IAI => the ligand is diffused, not fixed
