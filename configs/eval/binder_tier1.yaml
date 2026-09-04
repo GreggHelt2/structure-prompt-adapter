@@ -1,0 +1,32 @@
+# @package eval
+# Run 2, MULTIMER binder at tier 1 (dev plan/90 §5.0/§5.2). RFD3's OWN PD-L1 target
+# (docs/examples/protein_binder_design.json), config REBUILT rather than inherited (dev plan/90 §3a):
+#   - binder length PINNED at 100 (the example's "50-120" range leaves a λ profile undefined)
+#   - is_non_loopy deliberately UNSET (plan/81 G0; `true` plus a Fixed Motif hands motif tokens a
+#     value the training distribution never paired with a set flag)
+#   - hotspots and the hotspot origin strategy KEPT, since they define the target site
+#
+# ⛔ Uniform λ over BOTH chains: the per-residue profile has no CLI surface (dev plan/31), so this run
+# steers the fixed partner's tokens too. The partner is coordinate-frozen so its output cannot move,
+# but this run may NOT be described as steering only one chain. Same disclosure logic as §5.0b (c).
+defaults:
+  - default
+  - _self_
+
+length: null
+specification:
+  input: /home/user1/projects/spa/training_data/eval_external/5o45_cropped.pdb
+  contig: "100,/0,A17-131"         # 100 diffused binder | chain break | PD-L1 17-131 held fixed
+  dialect: 2
+  infer_ori_strategy: hotspots
+  select_hotspots:
+    A56: "CG,OH"
+    A115: "CG,SD"
+    A123: "CD2,OH"
+
+conditions: [baseline, spa]
+lambda_scale: [1.0, 2.0]
+num_designs: 16
+seed: 42
+flywheel:
+  inverse_fold: false

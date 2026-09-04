@@ -1,0 +1,28 @@
+# @package eval
+# Run 1, PROTEIN-LIGAND at tier 1 (dev plan/90 §5.0/§5.2). RFD3's OWN small-molecule substrate
+# (docs/examples/sm_binder_design.json): only the ligand is taken from the input, the protein is
+# generated de novo at a FIXED length of 180.
+#
+# ⚠️ select_fixed_atoms is deliberately ABSENT. RFD3's example sets {IAI: ""}, which UNFIXES the
+# ligand; omitting it leaves the input atoms fixed, which is the "fixed ligand" arm of RFD3's own
+# benchmark and the one this experiment wants. (It is also unpassable as a Hydra CLI dict, which is
+# what this file exists to avoid: four cells failed that way on 2026-09-03.)
+#
+# ⛔ Uniform λ over ALL tokens, the ligand's included: dev plan/90 §5.0b route (c), Gregg 2026-09-03.
+# The scope limit is emitted automatically into RUN_PROVENANCE.json by provenance.describe_conditioning.
+defaults:
+  - default
+  - _self_
+
+length: null                       # the specification carries the length; do not let 100 be injected
+specification:
+  input: /home/user1/projects/spa/training_data/eval_external/IAI.pdb
+  ligand: IAI
+  length: "180-180"
+
+conditions: [baseline, spa]
+lambda_scale: [1.0, 2.0]
+num_designs: 16
+seed: 42
+flywheel:
+  inverse_fold: false              # TIER 1: no ProteinMPNN, no OpenFold3
