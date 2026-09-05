@@ -5,6 +5,22 @@ conditions: [baseline, spa]   # baseline (clear_prompt == vanilla RFD3) and/or s
 lambda_scale: 1.0          # SPA strength λ; float or list (swept for spa only; baseline is λ=0). 0 -> unconditional
 num_designs: 8             # K designs per (condition, λ) — the RFD3 diffusion batch (one engine.run -> K backbones)
 length: 100                # design length (residues) for unconditional generation
+
+# ⭐ Per-residue λ profile (dev results/42 §9-§10). null -> UNIFORM λ over every token, which is what
+# every run before 2026-09-05 did, including the multimer and ligand probes: those steered the fixed
+# partner chain, the chain-break token and the ligand's own tokens alongside the designed chain.
+#
+# ⛔ EXPLICIT BY DESIGN, NOT INFERRED FROM THE CONTIG. `tokens` is the total design-frame token count
+# and `steered` a list of [start, end) spans that receive λ; everything else gets 0. Inferring these
+# from a contig would be a silent-failure surface on the generation path, and this project has paid for
+# those repeatedly. A wrong `tokens` raises rather than steering the wrong residues.
+#
+# Example, the multimeric binder `100,/0,A17-131` (100 designed + 115 target = 215 tokens), steering
+# ONLY the designed chain:
+#   profile: {tokens: 215, steered: [[0, 100]]}
+# Example, a length-matched steered region with unconditioned spacers inside a 180-residue chain:
+#   profile: {tokens: 180, steered: [[45, 134]]}
+profile: null
 specification: null        # optional RFD3 DesignInputSpecification dict (augments/overrides `length`)
 num_timesteps: null        # RFD3 sampler steps (null -> effective default 100 from rfd3 edm.yaml, NOT the 200 its
                            #   docs/dataclass claim; verified 2026-07-03; set e.g. 200 to override. lower = faster/cheaper)

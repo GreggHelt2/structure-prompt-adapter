@@ -843,6 +843,47 @@ def _run_once(engine, spec=None) -> list:
     return next(iter(outputs.values()))
 
 
+
+def _build_lambda_profile(cfg):
+    """Build the per-residue λ profile ``[I]`` from ``eval.profile``, or ``None`` for uniform λ.
+
+    ⭐ **Why this exists.** Until 2026-09-05 every eval-driven run applied a **uniform λ over every
+    design-frame token**. For a monomer that is what you want. For a **multimer** it also steers the fixed
+    partner chain and the chain-break token, and for a **protein-ligand** design it steers the ligand's own
+    tokens, so neither run isolates the channel it is about (dev ``results/42`` §9). The wrapper has
+    supported per-residue profiles since the two-steer work (``SPAWrapper.set_profile``); only this CLI
+    surface was missing.
+
+    ⛔ **Explicit, never inferred from the contig.** ``tokens`` is the total design-frame token count and
+    ``steered`` a list of ``[start, end)`` spans receiving λ; every other token gets 0. Deriving these from
+    a contig would be a silent-failure surface on the generation path, and a wrong span would steer the
+    wrong residues while producing plausible output. **Every bound is validated and a violation raises.**
+
+    Config::
+
+        eval.profile: {tokens: 215, steered: [[0, 100]]}
+    """
+    spec = getattr(getattr(cfg, "eval", cfg), "profile", None)
+    if spec is None:
+        return None
+    import torch          # lazy, matching this module's import discipline
+    tokens = int(spec["tokens"])
+    spans = [list(map(int, sp)) for sp in spec["steered"]]
+    if tokens <= 0:
+        raise ValueError(f"eval.profile.tokens must be positive, got {tokens}")
+    w = torch.zeros(tokens, dtype=torch.float32)
+    for lo, hi in spans:
+        if not (0 <= lo < hi <= tokens):
+            raise ValueError(
+                f"eval.profile.steered span [{lo}, {hi}) is out of range for tokens={tokens}. "
+                "Spans are half-open design-frame indices; they are NOT inferred from the contig, so "
+                "check the contig's own token count (designed residues + fixed chains) by hand."
+            )
+        w[lo:hi] = 1.0
+    if float(w.sum()) == 0.0:
+        raise ValueError("eval.profile.steered selects no tokens; omit `profile` for uniform λ instead.")
+    return w
+
 def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     """Generate RFD3 ± SPA designs from a composed config; write PDBs; return :class:`Design` records.
 
@@ -956,6 +997,13 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
             shuffle_batched = p[perm][None].expand(K, -1, -1).to(device=device, dtype=adapter_dtype).contiguous()
             print(f"[generate] SPA prompt-shuffle control: permuted {p.shape[0]} prompt rows (seed {seed}).")
 
+    # ⭐ Per-residue λ profile (dev results/42 §9-§10). None keeps today's uniform-λ behaviour exactly.
+    profile_vec = _build_lambda_profile(cfg)
+    if profile_vec is not None:
+        n_on = int((profile_vec > 0).sum())
+        print(f"[generate] λ PROFILE ACTIVE: {n_on} of {profile_vec.numel()} design-frame tokens steered "
+              f"(the rest are held at λ=0).")
+
     designs: list[Design] = []
     for condition in conditions:
         run_lambdas = [0.0] if condition == "baseline" else lambdas  # spa/null/shuffle sweep λ; baseline once
@@ -965,12 +1013,15 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
             elif condition == "nullprompt":          # control: SPA live on the learned null token e∅ (no real prompt)
                 adapter.set_null_prompt(K)
                 adapter.set_scale(lam)
+                adapter.set_profile(profile_vec)
             elif condition == "shuffle":             # control: SPA fed the row-permuted (scrambled) prompt
                 adapter.set_prompt(shuffle_batched, key_padding_mask=prompt_mask)
                 adapter.set_scale(lam)
+                adapter.set_profile(profile_vec)
             else:                                    # spa: the real structural prompt
                 adapter.set_prompt(prompt_batched, key_padding_mask=prompt_mask)
                 adapter.set_scale(lam)
+                adapter.set_profile(profile_vec)
 
             _seed_all(seed)                          # paired noise + identity-gate determinism
             with torch.no_grad():
