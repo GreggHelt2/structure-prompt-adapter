@@ -1010,6 +1010,7 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
         for lam in run_lambdas:
             if condition == "baseline":
                 adapter.clear_prompt()               # wrappers return base only == vanilla RFD3 (± native motif)
+                adapter.set_profile(None)            # never inherit a profile from a previous λ iteration
             elif condition == "nullprompt":          # control: SPA live on the learned null token e∅ (no real prompt)
                 adapter.set_null_prompt(K)
                 adapter.set_scale(lam)
