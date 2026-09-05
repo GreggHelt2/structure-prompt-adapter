@@ -78,6 +78,7 @@ class OF3Refolder:
         batch_patch_shim: str | None = None,
         ligand_ccd: str | None = None,
         ligand_smiles: str | None = None,
+        chain_msa_paths: dict | None = None,
     ) -> None:
         self.ckpt_path = str(ckpt_path)
         self.runner_yaml = str(runner_yaml)
@@ -96,6 +97,17 @@ class OF3Refolder:
         # every query is byte-identical to before this existed. `ligand_smiles` wins if both are given.
         self.ligand_ccd = str(ligand_ccd) if ligand_ccd else None
         self.ligand_smiles = str(ligand_smiles) if ligand_smiles else None
+        # ⭐ Per-chain precomputed alignments: {chain_index: [a3m path, ...]} (dev ``42`` §7.4b).
+        # ⛔ WHY THIS EXISTS. With no alignment supplied and the server off, OpenFold3 does NOT fail: it
+        # writes a one-sequence dummy and warns only via a UserWarning inside a subprocess. Every refold in
+        # this project's history ran that way. Harmless for ProteinMPNN-designed chains, which is all we
+        # ever refolded, and MEASURED to be harmless for their designability (dev ``42`` §7.11). ⛔ But a
+        # NATURAL chain cannot fold without one: our fixed PD-L1 target reaches TM **0.365** to its own
+        # crystal structure MSA-free and **0.983** with an alignment (dev ``42`` §7.4b). So a complex refold
+        # that pins a real target needs this, and target-aligned RMSD is meaningless without it.
+        # ⚠️ Keyed by the chain's index in the ProteinMPNN chain order, matching :meth:`_chain`. Absent keys
+        # get no alignment, so a monomer call is byte-identical to before this existed.
+        self.chain_msa_paths = dict(chain_msa_paths) if chain_msa_paths else None
 
     # ----------------------------------------------------------------------------------------------
     # Query JSON + command assembly + output-path reconstruction
@@ -125,6 +137,10 @@ class OF3Refolder:
             raise ValueError(f"refold: {len(parts)} chains exceeds the {len(self._CHAIN_IDS)} ids available")
         chains = [{"molecule_type": "protein", "chain_ids": [self._CHAIN_IDS[i]], "sequence": p}
                   for i, p in enumerate(parts)]
+        for i, ch in enumerate(chains):                        # per-chain precomputed alignment, if any
+            paths = (self.chain_msa_paths or {}).get(i)
+            if paths:
+                ch["main_msa_file_paths"] = [str(x) for x in paths]
         if self.ligand_ccd or self.ligand_smiles:
             lig = {"molecule_type": "ligand", "chain_ids": [self._CHAIN_IDS[len(parts)]]}
             if self.ligand_smiles:
