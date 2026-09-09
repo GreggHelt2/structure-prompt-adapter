@@ -194,7 +194,8 @@ def run_proteinmpnn(
     out_dir,
     num_seqs: int = 8,
     sampling_temp=0.1,
-    seed: int = 0,
+    seed: int = 42,  # MUST be non-zero: ProteinMPNN's `if args.seed:` reads 0 as falsy
+                     # and picks a fresh RANDOM seed each run (configs/eval/default.yaml).
     batch_size: int = 1,
     weights_dir=None,
     model_name: str = "v_48_020",
@@ -313,7 +314,7 @@ def inverse_fold(cfg, *, designs=None) -> list[SequenceSet]:
             out_dir=out_dir,
             num_seqs=int(pm.get("num_seqs", 8)),
             sampling_temp=pm.get("sampling_temp", 0.1),
-            seed=int(pm.get("seed", 0)),
+            seed=int(pm.get("seed", 42)),  # non-zero: see run_proteinmpnn's `seed` default
             batch_size=int(pm.get("batch_size", 1)),
             weights_dir=weights_dir,
             model_name=str(pm.get("model_name", "v_48_020")),
