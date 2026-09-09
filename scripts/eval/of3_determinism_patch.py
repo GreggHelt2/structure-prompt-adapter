@@ -72,6 +72,73 @@ from __future__ import annotations
 
 import sys
 
+# ⭐ Bump whenever a change here alters what ``deterministic=True`` PRODUCES. Runs made under
+# different contracts are different draws and must never be pooled per-structure.
+#   1  scatter_add_ only (2026-09-08). Position-dependent: see dev plan/97.
+#   2  adds per-item RNG reseeding, which removes that dependence (2026-09-09).
+CONTRACT = 2
+
+
+def _patch_position_independence() -> None:
+    """Make a query's output depend on the SEQUENCE, not on where it sits in the invocation.
+
+    ⛔ THE BUG, upstream and read-only. Feature-creation RNG is seeded ONCE, per worker by
+    ``pl_worker_init_function`` (which derives torch/``random``/numpy seeds from ``worker_id``) or per
+    process at ``num_workers=0``, and then ADVANCES item by item. A sequential sampler sends item *i*
+    to worker ``i mod num_workers`` at local index ``i div num_workers``, so an item's RNG state is a
+    function of its POSITION. ``predict_step``'s ``pl.seed_everything(42)`` cannot undo it: features
+    are built in the DataLoader, before that call.
+
+    MEASURED (dev plan/97): the same 105 aa sequence gave **seven distinct structures** across
+    positions {0, 4} x ``num_workers`` {0, 1, 2, 10}. With this patch, **one**.
+
+    THE FIX: derive a seed from the datapoint's own identity (query id plus its OF3 seed) and apply it
+    at the top of every ``__getitem__``. Position, worker count, file size and neighbouring queries
+    all drop out, while per-item variation survives, which a constant seed would have destroyed.
+
+    ⚠️ ``hashlib``, not ``hash()``: Python salts string hashing per process, so ``hash()`` would make
+    this irreproducible across runs, which is the opposite of the point.
+
+    ⛔ INSTALLED AT MODULE SCOPE ON PURPOSE, not from :func:`apply_patches`. ``__getitem__`` executes
+    inside DataLoader WORKERS, and OF3's forkserver context re-imports this module there as
+    ``__mp_main__``: the body runs, the ``__main__`` guard keeps ``main()`` from running. Moving this
+    call into ``main()`` would silently leave workers unpatched, and the run would look fine.
+    """
+    import hashlib
+    import random
+
+    import numpy as np
+    import torch
+    from openfold3.core.data.framework.single_datasets.inference import InferenceDataset
+
+    _orig_getitem = InferenceDataset.__getitem__
+    warned: list = []
+
+    def _seeded_getitem(self, index):
+        try:
+            dp = self.datapoint_cache.iloc[index]
+            key = f"{dp['query_id']}:{int(dp['seed'])}"
+        except Exception as exc:
+            # Falling back to a CONSTANT keeps position-independence, which is the property that
+            # matters, and only sacrifices per-item variation. Announced once, because silently
+            # reverting to position-dependence is the exact failure this patch exists to remove.
+            if not warned:
+                warned.append(1)
+                print(f"[of3_determinism_patch] WARNING: no datapoint identity for index {index} "
+                      f"({type(exc).__name__}); falling back to a constant per-item seed. Output stays "
+                      "position-independent but loses per-item variation.", file=sys.stderr, flush=True)
+            key = "__fallback__"
+        seed = int.from_bytes(hashlib.blake2b(key.encode(), digest_size=8).digest(), "big") % (2**31)
+        torch.default_generator.manual_seed(seed)   # CPU generator only: seeding CUDA here would
+        random.seed(seed)                           # initialise it inside a forked worker and kill it
+        np.random.seed(seed)
+        return _orig_getitem(self, index)
+
+    InferenceDataset.__getitem__ = _seeded_getitem
+
+
+_patch_position_independence()
+
 
 def apply_patches() -> None:
     import torch
@@ -98,8 +165,9 @@ def apply_patches() -> None:
     torch.Tensor.scatter_add_ = _deterministic_scatter_add_
 
     print(
-        "[of3_determinism_patch] scatter_add_ routed through torch's deterministic kernel. "
-        "Refolds will NOT match default-build runs at the same seed.",
+        f"[of3_determinism_patch] contract v{CONTRACT}: scatter_add_ routed through torch's "
+        "deterministic kernel, and __getitem__ reseeds per item from the datapoint's identity. "
+        "Refolds will NOT match default-build runs, nor contract v1 runs, at the same seed.",
         file=sys.stderr,
         flush=True,
     )
