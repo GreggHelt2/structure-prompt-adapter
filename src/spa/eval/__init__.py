@@ -12,6 +12,7 @@ from .flywheel import run_flywheel
 from .generate import Design, generate
 from .ladder import LadderPoint, run_ladder
 from .openfold3 import OF3Refolder
+from .determinism import enable_deterministic
 from .proteinmpnn import SequenceSet, inverse_fold, run_proteinmpnn
 from .score import (
     Adherence,
@@ -38,6 +39,7 @@ __all__ = [
     "SequenceSet",
     "inverse_fold",
     "run_proteinmpnn",
+    "enable_deterministic",
     # refold (Stage 3, OpenFold3)
     "OF3Refolder",
     # flywheel driver (orchestration)

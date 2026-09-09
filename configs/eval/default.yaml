@@ -53,6 +53,18 @@ sampler: null
 # merged onto the checkpoint's train_cfg. See spa.eval.generate.resolve_engine_overrides.
 engine: null
 seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
+
+# ⭐ OPT-IN bitwise determinism (dev plan/91). false -> today's behaviour, byte-identical: nothing is
+# patched at import, so an unset/false run cannot differ from stock. true -> replaces RFD3's ONE
+# order-unstable op (foundry scatter_mean's Tensor.index_reduce, CUDA atomics) with an order-stable
+# one-hot matmul, making generation bit-identical across independent processes. Cost-neutral
+# (20.24 s vs 20.39 s at L=100/K=4). No torch determinism flags or env vars are needed or used:
+# use_deterministic_algorithms RAISES on index_reduce, and with warn_only=True it silently does nothing.
+# ⛔ ENABLING THIS CHANGES THE NUMBERS. It does NOT reproduce anything the stock build generated
+# (0.056 to 2.469 A from stock at the same seed); it is a go-forward guarantee only.
+# ⛔ The guarantee is a TUPLE: same seed AND same num_designs (K) AND same GPU model AND same torch
+# build. Design i at K=4 differs from K=8 by up to 2.433 A, from shape-dependent GEMM kernel choice.
+deterministic: false
 ladder: null               # checkpoint-step ADHERENCE LADDER (scripts/eval/ladder_sweep.py, dev 13): list of
                            #   snapshot paths to sweep (adherence vs training step). null -> not a ladder run.
 

@@ -307,6 +307,13 @@ def build_eval_engine(cfg):
     """
     from rfd3.engine import RFD3InferenceConfig, RFD3InferenceEngine
 
+    # Opt-in bitwise determinism (dev plan/91 §3.2). No-op unless eval.deterministic is true, and
+    # nothing is patched at import, so the default path stays byte-identical. Applied here because
+    # build_eval_engine is the one choke point every driver routes through, including the probes
+    # that drive the engine directly via _run_once.
+    from .determinism import maybe_enable as _maybe_deterministic
+    _maybe_deterministic(cfg)
+
     ev = cfg.eval
     # ⚠️ `dict()` alone is NOT enough: it is shallow, so a NESTED mapping (select_hotspots,
     # select_fixed_atoms, select_buried, cif_parser_args) stays an OmegaConf DictConfig and RFD3's
@@ -923,6 +930,14 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     # it here covers every driver that routes through generate(); the probe drivers, which drive the
     # engine directly via _run_once, call spa.eval.provenance.write themselves.
     from . import provenance as _prov
+    # ⛔ BEFORE the provenance write, not after. The record is written early on purpose (a killed run
+    # must still leave one), so anything that must appear in it has to be decided by now. Enabling in
+    # build_eval_engine alone recorded `enabled: false` on a run that was in fact deterministic,
+    # which is precisely the misleading artifact dev plan/91 §3.2 requires this field to prevent.
+    # enable_deterministic() is idempotent, so the build_eval_engine hook (which covers drivers that
+    # never reach here) stays and simply no-ops the second time.
+    from .determinism import maybe_enable as _maybe_deterministic
+    _maybe_deterministic(cfg)
     _prov.write(out_dir, cfg, started=_prov._now_pacific())
 
     if engine is None:

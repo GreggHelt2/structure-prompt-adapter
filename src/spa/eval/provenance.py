@@ -242,6 +242,15 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
             }
             rec["sampler_requested"] = {k: _plain(ev.get(k, None))
                                         for k in ("num_timesteps", "gamma_0", "step_scale")}
+            # Which BUILD made this. Without it the deterministic and stock builds are
+            # indistinguishable after the fact, and they differ by up to 2.469 A at the same seed
+            # (dev plan/91 §1.2). `requested` is the config; `active` is what actually got patched.
+            try:
+                from .determinism import state as _det_state
+                rec["determinism"] = {"requested": _plain(ev.get("deterministic", False)),
+                                      **_det_state()}
+            except Exception:
+                pass
             rec["proteinmpnn"] = {k: _plain(ev.proteinmpnn.get(k, None))
                                   for k in ("seed", "num_seqs", "sampling_temp")} \
                 if ev.get("proteinmpnn", None) is not None else None
