@@ -6,7 +6,8 @@
 # Three things could differ on Hopper, and only a run can say:
 #
 #   A. cuBLAS. The RFD3 fix works because GEMMs are bit-exact run to run, measured on the A5000 as
-#      1 distinct bit pattern in 50 calls WITHOUT CUBLAS_WORKSPACE_CONFIG. That is a property of which
+#      1 DISTINCT OUTPUT among 50 identical calls (1 = deterministic, 50 = every call differed)
+#      WITHOUT CUBLAS_WORKSPACE_CONFIG. That is a property of which
 #      kernel cuBLAS selects, not a guarantee of matmul: cuBLAS can pick split-k with atomic
 #      accumulation for some shapes. If Hopper does, the one-hot matmul inherits the nondeterminism it
 #      was written to remove. ⭐ THIS IS THE GATE: if A fails, B and C are expected to fail too.
@@ -163,10 +164,15 @@ def cif_md5(d):
 print("="*74)
 print(f"H100 DETERMINISM PORTABILITY CHECK  ({a['gpu']}, torch {a['torch']}, CUDA {a['cuda']})")
 print("="*74)
-print("\nCHECK A — op-level, CUBLAS_WORKSPACE_CONFIG unset (distinct bit patterns / 50):")
+print("\nCHECK A - op-level, CUBLAS_WORKSPACE_CONFIG unset.")
+print("  Each op called 50x on IDENTICAL inputs; the number is how many DISTINCT outputs came back.")
+print("  1 = fully deterministic (all 50 calls agreed).  50 = every single call differed.")
+print("  Expect 1 for the matmuls (the fix depends on it) and >1 for the scatter ops (proves the probe can see the bug).\n")
 for k, v in a["ops"].items():
-    flag = "ok" if (("matmul" in k and v == 1) or ("matmul" not in k and v > 1)) else "!!"
-    print(f"   {k:<28} {v:>3}/50   {flag}")
+    want_det = "matmul" in k
+    ok = (v == 1) if want_det else (v > 1)
+    note = ("deterministic" if v == 1 else f"{v} different results") + ("" if ok else "  <-- UNEXPECTED")
+    print(f"   {k:<28} {v:>3} distinct / 50 calls   {note}")
 print(f"\n   GATE: {'PASS' if a['gate_pass'] else 'FAIL'}"
       f"  ({'GEMMs bit-exact, the RFD3 shim transfers' if a['gate_pass'] else 'GEMMs vary on Hopper'})")
 
