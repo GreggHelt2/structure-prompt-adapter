@@ -26,3 +26,13 @@ experiment_settings:
   use_msa_server: false
   use_templates: false
   seeds: [42]
+
+# ⭐ DATALOADER WORKERS: pinned to upstream's 10 EXPLICITLY, so the number is visible rather than
+# inherited. This is the CLOUD yaml and 10 is affordable on an a3-highgpu-1g (26 vCPU, ~234 GB), so
+# this line changes NOTHING about how past cloud runs behaved. It exists because the same hidden
+# default (entry_points/validator.py:112, a TRAINING default the predict path inherits) took the
+# local workstation down on 2026-09-09 at ~1.13 GB per forked worker. See of3_nokernel.yml, which
+# caps it at 2 for the 6-core / 125 GB A5000 box, and dev docs/plan/98.
+# ⛔ Do NOT copy this value into a local runner-yaml.
+data_module_args:
+  num_workers: 10

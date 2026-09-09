@@ -24,3 +24,26 @@ experiment_settings:
   use_msa_server: false
   use_templates: false
   seeds: [42]
+
+# ⛔ DATALOADER WORKERS: capped at 2, deliberately. OF3 ships ONE `DataModuleArgs` class
+# (entry_points/validator.py:106) shared by TrainingExperimentConfig (:315) and
+# InferenceExperimentConfig (:384), so its `num_workers: int = 10` is a TRAINING default that the
+# predict path inherits unchanged (`predict_dataloader` takes the else-branch at
+# data_module.py:503). On 2026-09-09 that default took the workstation down: each forked worker
+# holds ~1.13 GB (torch import + the chemical component dictionary, so it does NOT shrink with
+# query count), 10 per OF3 subprocess, 3 subprocesses at P=3, which is ~34 GB of host RAM in
+# dataloader workers ALONE. Two concurrent jobs reached 118.8 GB of 125 and the kernel OOM-killer
+# thrashed for ten minutes. Journal evidence: OOM 13:04:05 PDT, no Xid, no NVRM, no hung_task, so
+# the GPU was never involved. Full analysis: dev docs/plan/98.
+#
+# ⭐ WHY 2 IS NOT A COMPROMISE. Each invocation is ~12 queries at batch_size=1, so 10 workers with
+# the default prefetch_factor=2 could prefetch 20 items, more than the dataset contains. The work
+# itself is MSA-free featurization of a 105-250 aa monomer, well under a second, against ~10-16 s
+# of GPU diffusion per refold. One worker prefetching while the GPU runs recovers all of the
+# available overlap; the other nine only ever idled. `persistent_workers` is false upstream, so
+# they were forked and torn down per invocation without even amortizing.
+# ⚠️ 10 workers x 3 lanes was also 30 processes against 6 PHYSICAL cores (WORKING_AGREEMENTS §5.1).
+# The `--workers` PreToolUse guard could not see it: the number lived in a dependency's default,
+# not on our command line.
+data_module_args:
+  num_workers: 2
