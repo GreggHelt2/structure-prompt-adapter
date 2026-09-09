@@ -243,7 +243,7 @@ def load_spa(adapter, path) -> None:
 def gather_provenance(cfg) -> dict:
     """Best-effort run provenance stamped into every checkpoint (and the W&B run config, workstream
     C): which split / ESM3 cache / RFD3 ckpt / git commit produced these weights (dev ``04`` §11
-    reproducibility). Never raises — provenance is informational, not load-bearing."""
+    reproducibility). Never raises: provenance is informational, and nothing depends on it."""
     import json
     import os
     import subprocess

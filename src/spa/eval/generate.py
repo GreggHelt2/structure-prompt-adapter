@@ -779,7 +779,7 @@ def write_pdb(atom_array, path: Path) -> int:
 
 def _write_sidecar(path: Path, design: Design, cfg, metadata) -> None:
     """Minimal provenance sidecar ``.json`` next to each PDB (dev ``05``: ``.cif.gz`` + sidecar
-    ``.json``). Best-effort: provenance is informational, never load-bearing."""
+    ``.json``). Best-effort: provenance is informational, and nothing depends on it."""
     import json
 
     rec = {
