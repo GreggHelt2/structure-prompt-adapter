@@ -10,8 +10,8 @@ prompt is set, ``SPAWrappedAttention.forward`` returns ``self.orig(...)`` verbat
 every generation step is bit-for-bit vanilla. RFD3's full *rollout*, however, is **not**
 reproducible run-to-run on GPU: its sampler noise IS reproducible (verified — ``torch.normal`` draws
 match under a fixed seed), but nondeterministic CUDA kernels in the network forward amplify over the
-diffusion trajectory (measured ~0.5–0.8 Å Cα divergence between two identically-seeded rollouts, with
-different sequence-head outputs) — a property of RFD3, independent of SPA, and unfixable via
+diffusion trajectory (measured ~0.5–0.8 Å Cα divergence between two identically-seeded rollouts for 3 of
+4 designs, with the 4th at 7.15 Å, and different sequence-head outputs) — a property of RFD3, independent of SPA, and unfixable via
 ``torch.use_deterministic_algorithms`` (some ops have no deterministic impl). So comparing two
 independent rollouts would test RFD3's (lack of) reproducibility, not SPA's identity. We therefore
 assert the invariant where it is exact: on a REAL generation forward input captured from

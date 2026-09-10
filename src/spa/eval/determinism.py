@@ -2,7 +2,9 @@
 
 WHY THIS EXISTS. RFD3 as shipped is not bitwise reproducible: a fixed seed reproduces the initial
 noise cloud and the sampling distribution, but not the final structure. Two runs of one config at one
-seed differ by roughly 0.5 to 0.8 Å aligned Cα, occasionally several Å. Every number this project
+seed differ by roughly 0.5 to 0.8 Å aligned Cα typically, but the tail is what matters: of four
+designs measured at one seed, three reproduced to about 0.6 Å and the fourth landed 7.15 Å away, which
+is a different structure rather than a perturbed one. Every number this project
 reports is therefore a rate or a mean over n, and every figure names a persisted coordinate file
 rather than a re-runnable seed.
 
