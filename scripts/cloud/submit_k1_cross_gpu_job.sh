@@ -43,7 +43,10 @@ REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 RFD3_CKPT_URI="${RFD3_CKPT_URI:-$BUCKET/weights/rfd3_latest.ckpt}"
-LENGTHS="${LENGTHS:-100 150 208}"
+# ⛔ MUST match a length with an existing A5000 reference, or that arm produces nothing comparable.
+# Have: 100 (8fd129f939f6, three runs), 208 (742aca051e76), 374 (50c4b7c7591e).
+# To add one, run dev scripts/analysis/make_k1_cross_gpu_refs.sh FIRST.
+LENGTHS="${LENGTHS:-100 208 374}"
 RESULTS_URI="${RESULTS_URI:-}"                      # empty -> run_k1_cross_gpu_h100.sh's own default
 DISK_GB="${DISK_GB:-150}"
 STRATEGY="${STRATEGY:-ONDEMAND}"
