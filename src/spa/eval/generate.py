@@ -778,8 +778,29 @@ def write_pdb(atom_array, path: Path) -> int:
 
 
 def _write_sidecar(path: Path, design: Design, cfg, metadata) -> None:
-    """Minimal provenance sidecar ``.json`` next to each PDB (dev ``05``: ``.cif.gz`` + sidecar
-    ``.json``). Best-effort: provenance is informational, and nothing depends on it."""
+    """Provenance sidecar ``.json`` next to each PDB (dev ``05``: ``.cif.gz`` + sidecar ``.json``).
+
+    ⭐ THE SIDECAR MUST CARRY THE FULL REPRODUCIBILITY IDENTITY, because it is what travels WITH a
+    design. Three fields were added 2026-09-09 after each was measured to change the structure:
+
+      num_designs  K is the diffusion batch dimension, so design *i* at K=4 differs from design *i*
+                   at K=8 by up to 2.433 A (dev ``results/44`` section 4.1). It was absent entirely:
+                   a scan of 20,529 sidecars for K=1 returned ZERO while the same scan over 710
+                   RUN_PROVENANCE.json files found 28 runs, so auditing K from design artifacts alone
+                   said the project had never run at K=1.
+      deterministic  the stock and patched builds differ by up to 2.469 A at one seed
+                   (dev ``plan/91`` section 1.2) and were indistinguishable after the fact except by
+                   grepping the run log for the "[determinism] ENABLED" banner.
+      gpu          MEASURED 2026-09-09 (dev ``results/44`` section 4b): the same design at the same
+                   seed on an A5000 against an H100, identical torch and CUDA, differs by 2.387 A
+                   aligned Ca-RMSD at L=208, against a 2.0 A designability threshold. Platform is as
+                   load-bearing as K.
+
+    ⚠️ Sidecars written before 2026-09-09 lack all three. K is recoverable from RUN_PROVENANCE.json,
+    the build only from the run log, and the platform from neither on cloud runs.
+
+    Best-effort: nothing depends on it at run time.
+    """
     import json
 
     rec = {
@@ -789,12 +810,22 @@ def _write_sidecar(path: Path, design: Design, cfg, metadata) -> None:
         "idx": design.idx,
         "n_residues": design.n_residues,
         "seed": int(cfg.eval.get("seed", 0)),
+        "num_designs": cfg.eval.get("num_designs"),      # K: part of the identity, see docstring
+        "deterministic": bool(cfg.eval.get("deterministic", False)),
         "variant": cfg.variant.get("name"),
         "spa_ckpt": cfg.eval.get("ckpt"),
         "length": cfg.eval.get("length"),
         "num_timesteps": cfg.eval.get("num_timesteps"),
         "rfd3_metadata": metadata or {},
     }
+    try:                                                  # platform, see docstring
+        import torch
+        if torch.cuda.is_available():
+            rec["gpu"] = torch.cuda.get_device_name(0)
+            rec["torch"] = torch.__version__
+            rec["cuda"] = torch.version.cuda
+    except Exception:
+        pass
     try:
         with open(path.with_suffix(".json"), "w") as fh:
             json.dump(rec, fh, indent=2, default=str)
