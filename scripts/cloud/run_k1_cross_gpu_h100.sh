@@ -32,7 +32,7 @@ RFD3_CKPT_URI="${RFD3_CKPT_URI:-$BUCKET/weights/rfd3_latest.ckpt}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 OUT="${OUT:-/workspace/k1_cross_gpu}"
 RESULTS_URI="${RESULTS_URI:-$BUCKET/results/k1_cross_gpu_h100/$(date -u +%Y%m%dT%H%M%SZ)}"
-LENGTHS="${LENGTHS:-100 150 208}"
+LENGTHS="${LENGTHS:-100 208 374}"   # lengths with an existing A5000 reference
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 trap 'log "K=1 CROSS-GPU CHECK FAILED at line $LINENO"' ERR
@@ -98,7 +98,18 @@ for L, d in sorted(by.items()):
 print("\n" + ("H100 is self-consistent at K=1. Diff these hashes against the A5000 refs."
               if ok else
               "H100 is NOT self-consistent; a cross-GPU comparison is meaningless until that is fixed."))
-print("\nA5000 reference, L=100: 8fd129f939f6 (dev outputs 2026-09-09__rfd3_k1_portability_v2, two invocations)")
+REF = {100: "8fd129f939f6", 208: "742aca051e76", 374: "50c4b7c7591e"}
+print("\nCROSS-GPU COMPARISON against the A5000 references")
+print("  L=100 is confirmed by THREE independent A5000 runs across two scripts; 208 and 374 by one each.\n")
+for L, d in sorted(by.items()):
+    r = REF.get(L)
+    if r is None:
+        print(f"  L={L:<5} no A5000 reference at this length; generate one with"); continue
+    v = "PORTABLE, bit-identical across architectures" if d.get("a") == r else "DIFFERS across architectures"
+    print(f"  L={L:<5} H100 {d.get('a')}  vs  A5000 {r}   -> {v}")
+print("\n⚠️ A match is weak evidence FOR portability at one length and strong evidence AGAINST it if it fails.")
+print("⚠️ Compare env.json's torch/CUDA build against the A5000's 2.5.1+cu124 / 12.4 before attributing")
+print("   any difference to the architecture: the build sits in the same identity tuple.")
 PY
 
 # ⭐ STAGE THE STRUCTURES, not only the verdict. This is the thing the previous job got wrong.
