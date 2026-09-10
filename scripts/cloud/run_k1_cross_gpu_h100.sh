@@ -85,7 +85,10 @@ for L in $LENGTHS; do
 done
 
 log "H100 self-consistency (a vs b per length)"
-python - "$OUT/refs.jsonl" | tee "$OUT/VERDICT.txt" <<'PY'
+# ⛔ NO PIPE HERE. In `python - args | tee file <<'PY'` the heredoc binds to TEE, not python, so
+# VERDICT.txt received the SCRIPT SOURCE and python got nothing. Hit on 2026-09-09; the data in
+# refs.jsonl was unaffected, but the job's own verdict was unreadable. Write, then tee separately.
+python - "$OUT/refs.jsonl" > "$OUT/VERDICT.txt" <<'PY'
 import json, sys, collections
 rows = [json.loads(l) for l in open(sys.argv[1])]
 by = collections.defaultdict(dict)
@@ -111,6 +114,7 @@ print("\n⚠️ A match is weak evidence FOR portability at one length and stron
 print("⚠️ Compare env.json's torch/CUDA build against the A5000's 2.5.1+cu124 / 12.4 before attributing")
 print("   any difference to the architecture: the build sits in the same identity tuple.")
 PY
+cat "$OUT/VERDICT.txt"
 
 # ⭐ STAGE THE STRUCTURES, not only the verdict. This is the thing the previous job got wrong.
 log "uploading results AND PDBs to $RESULTS_URI"
