@@ -760,9 +760,10 @@ def _fmt_lambda(value: float) -> str:
     return f"{float(value):g}"
 
 
-def write_pdb(atom_array, path: Path) -> int:
+def write_pdb(atom_array, path: Path) -> tuple[int, Path]:
     """Write an RFD3 biotite ``AtomArray`` to PDB (the dev ``05`` F1.5.2 CIF→PDB role, in-memory —
-    RFD3's native dump is mmCIF; ProteinMPNN's ``parse_PDB`` wants PDB). Returns the residue count.
+    RFD3's native dump is mmCIF; ProteinMPNN's ``parse_PDB`` wants PDB). Returns ``(residue count,
+    path actually written)`` -- the path can differ from the one requested, see the collision note below.
 
     Uses biotite directly (present in ``spa-dev``; gemmi is not) — the AtomArray is the cleaned,
     guidepost/virtual-atom-stripped protein the engine would otherwise serialize to ``.cif.gz``.
@@ -770,11 +771,50 @@ def write_pdb(atom_array, path: Path) -> int:
     from biotite.structure import get_residue_count
     from biotite.structure.io.pdb import PDBFile
 
+    import hashlib
+    import io
+
     path.parent.mkdir(parents=True, exist_ok=True)
     pdb = PDBFile()
     pdb.set_structure(atom_array)
-    pdb.write(str(path))
-    return int(get_residue_count(atom_array))
+
+    # ⛔ NEVER SILENTLY OVERWRITE A DESIGN. Serialize to memory first so the bytes can be compared.
+    #
+    # WHY THIS EXISTS. dev plan/30 section 1.2 records unrecoverable data loss of exactly this shape:
+    # ProteinMPNN FASTAs carried a run-independent name and shared one directory, so "any filename
+    # reused across dates kept only the last write", proving the mechanism with 160 cross-tree
+    # collisions of which 0 were byte-identical. Designs have never hit it (measured 2026-09-09: 953
+    # archived design directories, ZERO holding two configs), so this is defence in depth, not a fix.
+    #
+    # ⭐ WHY DEFLECT RATHER THAN REFUSE, which is the opposite of what the caller-side check does. By
+    # the time we are here the structure has already been GENERATED: refusing would discard a real
+    # computed design, which is also data loss, just a different one. So the rule is asymmetric.
+    # Refuse BEFORE spending compute; never discard AFTER. A weird filename is recoverable; a
+    # destroyed file is not.
+    #
+    # ⭐ WHY A CONTENT HASH RATHER THAN A CONFIG HASH. A config hash cannot separate two runs of the
+    # SAME config, which on the stock nondeterministic build produce different structures (0.056 to
+    # 2.469 A at one seed, dev plan/91 section 1.2), so a config-hash suffix would collide with itself.
+    # A content hash always differs when the content differs, and it makes the common case free:
+    # under deterministic=true a legitimate rerun writes identical bytes and this no-ops.
+    buf = io.StringIO()
+    pdb.write(buf)
+    data = buf.getvalue().encode()
+
+    if path.exists():
+        existing = path.read_bytes()
+        if existing == data:
+            return int(get_residue_count(atom_array)), path   # idempotent rerun, nothing to do
+        h = hashlib.md5(data).hexdigest()[:8]
+        deflected = path.with_name(f"{path.stem}__{h}{path.suffix}")
+        print(f"[generate] ⛔ COLLISION: {path.name} exists with DIFFERENT content. Not overwriting.\n"
+              f"[generate]    wrote {deflected.name} instead. Two runs are sharing one out_dir with\n"
+              f"[generate]    the same design identity; fix the driver's out_dir. See dev plan/30 1.2.",
+              flush=True)
+        path = deflected
+
+    path.write_bytes(data)
+    return int(get_residue_count(atom_array)), path
 
 
 def _write_sidecar(path: Path, design: Design, cfg, metadata, seed: int | None = None) -> None:
@@ -1127,7 +1167,10 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
                     name = f"{pid}_{condition}_lambda{_fmt_lambda(lam_label)}{sd}_{idx}.pdb"
                     path = out_dir / name
                     aa = rfd3_out.atom_array
-                    n_res = write_pdb(aa, path)
+                    # ⚠️ write_pdb may DEFLECT to a hash-suffixed name on a content collision rather
+                    # than overwrite, so it returns the path it actually used. Using `path` blindly
+                    # would attach the sidecar to a file this run did not write.
+                    n_res, path = write_pdb(aa, path)
                     design = Design(prompt_id=pid, condition=condition, lambda_scale=lam_label,
                                     idx=idx, path=path, n_residues=n_res, atom_array=aa)
                     _write_sidecar(path, design, cfg, getattr(rfd3_out, "metadata", None),

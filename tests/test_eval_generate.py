@@ -193,3 +193,46 @@ def test_spa_runs_and_residue_counts(shared):
         assert d.n_residues == LENGTH
         parsed = PDBFile.read(str(d.path)).get_structure(model=1)
         assert get_residue_count(parsed) == LENGTH
+
+
+def test_write_pdb_never_silently_overwrites(tmp_path):
+    """A design write must never destroy a different design at the same path.
+
+    dev ``plan/30`` section 1.2 records unrecoverable loss of exactly this shape: ProteinMPNN FASTAs
+    carried a run-independent name into a shared directory, so "any filename reused across dates kept
+    only the last write" (160 cross-tree collisions, 0 byte-identical). Designs have never hit it, so
+    this asserts the failsafe rather than a fix.
+
+    Three behaviours, and the asymmetry is deliberate: identical bytes no-op (a deterministic rerun is
+    free), different bytes DEFLECT rather than refuse (the structure is already generated, so refusing
+    would discard a real design), and the original survives either way.
+    """
+    import numpy as np
+    from biotite.structure import AtomArray
+
+    from spa.eval.generate import write_pdb
+
+    def mk(n, shift=0.0):
+        a = AtomArray(n)
+        a.coord = np.arange(n * 3, dtype=float).reshape(n, 3) + shift
+        a.chain_id = np.array(["A"] * n)
+        a.res_id = np.arange(1, n + 1)
+        a.res_name = np.array(["GLY"] * n)
+        a.atom_name = np.array(["CA"] * n)
+        a.element = np.array(["C"] * n)
+        return a
+
+    p = tmp_path / "x_baseline_lambda1_0.pdb"
+    _, p1 = write_pdb(mk(5), p)
+    assert p1 == p
+
+    _, p2 = write_pdb(mk(5), p)                     # identical content
+    assert p2 == p, "an identical rerun must no-op, not proliferate files"
+    assert len(list(tmp_path.glob("*.pdb"))) == 1
+
+    first = p.read_bytes()
+    _, p3 = write_pdb(mk(5, 9.0), p)                # different content, same path
+    assert p3 != p, "a content collision must deflect, not overwrite"
+    assert p3.name.startswith("x_baseline_lambda1_0__"), p3.name
+    assert p.read_bytes() == first, "the ORIGINAL design must survive untouched"
+    assert p3.read_bytes() != first
