@@ -53,6 +53,12 @@ sampler: null
 # merged onto the checkpoint's train_cfg. See spa.eval.generate.resolve_engine_overrides.
 engine: null
 seed: 0                    # re-seeded before EVERY sampler run -> reproducible + paired noise across (condition, λ)
+# ⭐ OPT-IN multi-seed generation (dev plan/100 §5). null -> [seed], i.e. exactly today's behaviour.
+# Under the K=1 convention a design is identified by its SEED, not by its row in a diffusion batch, so
+# N designs means N seeds. Looping them HERE pays one model load (~9.1 s) instead of N.
+# ⛔ With more than one seed the filename gains `_s<seed>`, because the seed then varies WITHIN an
+# invocation and something has to discriminate it. Single-seed runs keep today's exact names.
+seeds: null                # e.g. [0,1,2,3,4,5,6,7] for 8 designs at K=1
 
 # ⭐ OPT-IN bitwise determinism (dev plan/91). false -> today's behaviour, byte-identical: nothing is
 # patched at import, so an unset/false run cannot differ from stock. true -> replaces RFD3's ONE

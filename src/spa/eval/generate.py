@@ -777,7 +777,7 @@ def write_pdb(atom_array, path: Path) -> int:
     return int(get_residue_count(atom_array))
 
 
-def _write_sidecar(path: Path, design: Design, cfg, metadata) -> None:
+def _write_sidecar(path: Path, design: Design, cfg, metadata, seed: int | None = None) -> None:
     """Provenance sidecar ``.json`` next to each PDB (dev ``05``: ``.cif.gz`` + sidecar ``.json``).
 
     ⭐ THE SIDECAR MUST CARRY THE FULL REPRODUCIBILITY IDENTITY, because it is what travels WITH a
@@ -809,7 +809,8 @@ def _write_sidecar(path: Path, design: Design, cfg, metadata) -> None:
         "lambda_scale": design.lambda_scale,
         "idx": design.idx,
         "n_residues": design.n_residues,
-        "seed": int(cfg.eval.get("seed", 0)),
+        # ⛔ the seed this design was ACTUALLY generated at, which under eval.seeds is not cfg.eval.seed.
+        "seed": int(seed if seed is not None else cfg.eval.get("seed", 0)),
         "num_designs": cfg.eval.get("num_designs"),      # K: part of the identity, see docstring
         "deterministic": bool(cfg.eval.get("deterministic", False)),
         "variant": cfg.variant.get("name"),
@@ -843,6 +844,28 @@ def _seed_all(seed: int) -> None:
     from lightning.fabric import seed_everything
 
     seed_everything(int(seed), workers=True, verbose=False)
+
+
+def _normalize_seeds(ev) -> list[int]:
+    """``eval.seeds`` as a list, defaulting to ``[eval.seed]``.
+
+    ⭐ Accepts a scalar or a list so ``eval.seeds=7`` and ``eval.seeds=[0,1,2]`` both work. ⛔ Duplicates
+    are dropped and order is preserved: two identical seeds in one invocation would generate the same
+    design twice and, worse, write it to the same path, which is the collision this whole feature has to
+    avoid rather than create.
+    """
+    raw = ev.get("seeds", None)
+    if raw is None:
+        return [int(ev.get("seed", 0))]
+    vals = [raw] if isinstance(raw, (int, str)) else list(raw)
+    out: list[int] = []
+    for v in vals:
+        iv = int(v)
+        if iv not in out:
+            out.append(iv)
+    if not out:
+        raise ValueError("eval.seeds resolved to an empty list; omit it to use eval.seed instead")
+    return out
 
 
 def _normalize_conditions(value) -> list[str]:
@@ -1050,6 +1073,24 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
         print(f"[generate] λ PROFILE ACTIVE: {n_on} of {profile_vec.numel()} design-frame tokens steered "
               f"(the rest are held at λ=0).")
 
+    # ⭐ eval.seeds: a LIST of seeds looped INSIDE the (condition, λ) cells (dev plan/100 §5).
+    # Default [eval.seed], so an unset config runs exactly one seed and behaves identically to before.
+    #
+    # WHY IT EXISTS. Under the K=1 convention (plan/100) a design is identified by its SEED rather than
+    # by its row in a diffusion batch, because K is part of the reproducibility identity: design i at
+    # K=4 differs from design i at K=8 by up to 2.433 A (results/44 §4.1). Getting N designs therefore
+    # means N seeds, and without this loop that is N separate invocations paying N model loads at ~9.1 s
+    # each, which is not the cost model plan/100 §6a measured.
+    #
+    # ⛔ THE SEED MUST REACH THE FILENAME. It is now a WITHIN-invocation varying axis, alongside
+    # condition and λ, so the filename has to discriminate it or every seed writes the same path and
+    # silently keeps the last. That is the mechanism behind plan/30 §1.2's unrecoverable FASTA loss,
+    # where a run-independent name met a shared directory. Axes that vary BETWEEN invocations are
+    # discriminated by out_dir instead; measured 2026-09-09, 953 archived design directories hold
+    # exactly zero cases of two configs sharing one, so that half of the invariant is holding.
+    seeds = _normalize_seeds(ev)
+    multi_seed = len(seeds) > 1
+
     designs: list[Design] = []
     for condition in conditions:
         run_lambdas = [0.0] if condition == "baseline" else lambdas  # spa/null/shuffle sweep λ; baseline once
@@ -1070,37 +1111,46 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
                 adapter.set_scale(lam)
                 adapter.set_profile(profile_vec)
 
-            _seed_all(seed)                          # paired noise + identity-gate determinism
-            with torch.no_grad():
-                output_list = _run_once(engine, motif_spec)
+            for run_seed in seeds:
+                _seed_all(run_seed)                  # paired noise + identity-gate determinism
+                with torch.no_grad():
+                    output_list = _run_once(engine, motif_spec)
 
-            lam_label = 0.0 if condition == "baseline" else float(lam)
-            for idx, rfd3_out in enumerate(output_list):
-                name = f"{pid}_{condition}_lambda{_fmt_lambda(lam_label)}_{idx}.pdb"
-                path = out_dir / name
-                aa = rfd3_out.atom_array
-                n_res = write_pdb(aa, path)
-                design = Design(prompt_id=pid, condition=condition, lambda_scale=lam_label,
-                                idx=idx, path=path, n_residues=n_res, atom_array=aa)
-                _write_sidecar(path, design, cfg, getattr(rfd3_out, "metadata", None))
-                designs.append(design)
+                lam_label = 0.0 if condition == "baseline" else float(lam)
+                for idx, rfd3_out in enumerate(output_list):
+                    # ⛔ The seed appears ONLY when more than one is running. A single-seed run keeps
+                    # today's exact name, so every archived path, every driver and the ~18 analysis
+                    # regexes matching `_lambda([0-9_.]+)_(\d+)\.pdb` are untouched. A multi-seed run
+                    # deliberately does NOT match those, so an old script errors instead of silently
+                    # mis-joining designs from different seeds.
+                    sd = f"_s{run_seed}" if multi_seed else ""
+                    name = f"{pid}_{condition}_lambda{_fmt_lambda(lam_label)}{sd}_{idx}.pdb"
+                    path = out_dir / name
+                    aa = rfd3_out.atom_array
+                    n_res = write_pdb(aa, path)
+                    design = Design(prompt_id=pid, condition=condition, lambda_scale=lam_label,
+                                    idx=idx, path=path, n_residues=n_res, atom_array=aa)
+                    _write_sidecar(path, design, cfg, getattr(rfd3_out, "metadata", None),
+                                   seed=run_seed)
+                    designs.append(design)
                 # OPT-IN per-step trajectory dump (feature-flagged, default off; dev prototype).
                 # When +eval.dump_trajectory=true the engine attaches per-step AtomArrayStacks to the
                 # RFD3Output; persist each as a multi-MODEL PDB alongside the design. NOTE: the foundry
                 # engine (engine.py:306-309) CROSSES the two field labels, so we dump both series under
                 # their RAW field names — pick the "clean refining" one by CONTENT downstream, not name.
-                if bool(ev.get("dump_trajectory", False)):
-                    from biotite.structure.io.pdb import PDBFile as _PDBFile
-                    for _field in ("denoised_trajectory_stack", "noisy_trajectory_stack"):
-                        _stack = getattr(rfd3_out, _field, None)
-                        if _stack is None:
-                            continue
-                        _tp = path.with_name(f"{path.stem}_traj_{_field.split('_')[0]}.pdb")
-                        _pf = _PDBFile()
-                        _pf.set_structure(_stack)
-                        _pf.write(str(_tp))
-                        print(f"[generate] trajectory[{_field}]: {len(_stack)} frames -> {_tp}")
-            print(f"[generate] {condition} λ={_fmt_lambda(lam_label)} -> {len(output_list)} design(s)")
+                    if bool(ev.get("dump_trajectory", False)):
+                        from biotite.structure.io.pdb import PDBFile as _PDBFile
+                        for _field in ("denoised_trajectory_stack", "noisy_trajectory_stack"):
+                            _stack = getattr(rfd3_out, _field, None)
+                            if _stack is None:
+                                continue
+                            _tp = path.with_name(f"{path.stem}_traj_{_field.split('_')[0]}.pdb")
+                            _pf = _PDBFile()
+                            _pf.set_structure(_stack)
+                            _pf.write(str(_tp))
+                            print(f"[generate] trajectory[{_field}]: {len(_stack)} frames -> {_tp}")
+                print(f"[generate] {condition} λ={_fmt_lambda(lam_label)} seed={run_seed} "
+                      f"-> {len(output_list)} design(s)")
 
     print(f"[generate] wrote {len(designs)} design(s) to {out_dir}")
     return designs
