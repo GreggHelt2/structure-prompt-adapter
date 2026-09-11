@@ -25,7 +25,13 @@ PROBE_ONLY="${PROBE_ONLY:-0}"                                       # 1 -> stop 
 # so this normally lands on the 2 TB pd-ssd (slower streaming; the PROBE below measures whether that hurts).
 say "DISK DIAGNOSTIC:"; { lsblk -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null; df -h 2>/dev/null; \
   mount 2>/dev/null | grep -iE "ssd|nvme|md[0-9]|local"; } | sed 's/^/  /' || true
-NEED_GB="${MIN_FREE_GB:-1750}"                                      # ~1.66 TB DBs + working set
+DB_SET="${DB_SET:-full}"
+case "$DB_SET" in
+  uniref30) DBS="uniref30_2302-m18v1";                              NEED_GB="${MIN_FREE_GB:-550}";;   # core; fits ~680 GB local NVMe
+  full)     DBS="uniref30_2302-m18v1 colabfold_envdb_202108-m18v1"; NEED_GB="${MIN_FREE_GB:-1750}";;  # + metagenomic; needs the 2 TB pd-ssd
+  *) say "FATAL: unknown DB_SET=$DB_SET (want uniref30 | full)"; exit 1;;
+esac
+say "DB_SET=$DB_SET  DBS='$DBS'  NEED_GB=$NEED_GB"
 # Pick the FIRST writable mount with >= NEED_GB free, checking fast local NVMe first. MEASURED on the a3
 # (2026-09-11): the ~750 GB local-NVMe RAID0 (md0) mounts at / and /cache (~680 GB free, too small), while
 # the 2 TB pd-ssd (bootDiskSizeGb) surfaces at /var/log-storage (~2 TB free) -> the DBs land there.
@@ -53,16 +59,20 @@ fi
 # ⚠️ This runtime install is the least-validated part of the probe -> it runs FIRST so a failure costs
 # seconds, not the ~1 h DB pull that follows.
 BIN="$WORK/bin"; mkdir -p "$BIN"; export PATH="$BIN:$PATH"
+# download helper: the spa-cloud image lacks wget -> curl, then wget, then python urllib.
+dl(){ curl -fsSL "$1" -o "$2" 2>/dev/null || wget -q -O "$2" "$1" 2>/dev/null \
+      || python3 -c "import sys,urllib.request;urllib.request.urlretrieve(sys.argv[1],sys.argv[2])" "$1" "$2"; }
+unz(){ unzip -q -o "$1" -d "$2" 2>/dev/null || python3 -c "import zipfile,sys;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$1" "$2"; }
 if ! command -v mmseqs >/dev/null 2>&1; then
   say "installing MMseqs2-GPU static binary (mmseqs-linux-gpu)"
-  ( cd "$WORK" && wget -q https://mmseqs.com/latest/mmseqs-linux-gpu.tar.gz && tar xzf mmseqs-linux-gpu.tar.gz )
+  dl https://mmseqs.com/latest/mmseqs-linux-gpu.tar.gz "$WORK/mmseqs.tar.gz" && tar xzf "$WORK/mmseqs.tar.gz" -C "$WORK"
   ln -sf "$WORK/mmseqs/bin/mmseqs" "$BIN/mmseqs"
 fi
 MMSEQS="${MMSEQS:-$BIN/mmseqs}"
-command -v colabfold_search >/dev/null 2>&1 || { say "installing ColabFold (pip)"; pip install --quiet colabfold; }
+command -v colabfold_search >/dev/null 2>&1 || { say "installing ColabFold (pip)"; pip install --quiet colabfold 2>&1 | tail -2; }
 if ! command -v ngc >/dev/null 2>&1; then
   say "installing NGC CLI"
-  ( cd "$WORK" && wget -q -O ngccli.zip https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/current/files/ngccli_linux.zip && unzip -q ngccli.zip )
+  dl https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/current/files/ngccli_linux.zip "$WORK/ngccli.zip" && unz "$WORK/ngccli.zip" "$WORK"
   ln -sf "$WORK/ngc-cli/ngc" "$BIN/ngc"
 fi
 # NGC auth: the SAME spa-ngc-key secret the cache-gen job used to pull CDDB from NGC.
@@ -80,7 +90,7 @@ command -v ngc >/dev/null 2>&1 || { say "FATAL: no ngc CLI"; exit 1; }
 if [ ! -f "$DB_DIR/.DB_OK" ]; then
   say "pulling NGC pre-indexed GPU DBs into $DB_DIR (no makepaddedseqdb needed)"
   mkdir -p "$DB_DIR"
-  for DB in uniref30_2302-m18v1 colabfold_envdb_202108-m18v1; do
+  for DB in $DBS; do
     say "  ngc download nim/colabfold/msa-search:$DB"
     ngc registry model download-version "nim/colabfold/msa-search:$DB" --dest "$DB_DIR"
   done

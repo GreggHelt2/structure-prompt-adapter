@@ -18,7 +18,7 @@ set -euo pipefail
 
 PROJECT="${PROJECT:-spa-dev-499900}"
 REGION="${REGION:-us-central1}"
-IMAGE="${IMAGE:-us-central1-docker.pkg.dev/spa-dev-499900/spa/spa-cloud:0.3.0}"
+IMAGE="${IMAGE:-us-central1-docker.pkg.dev/spa-dev-499900/spa/spa-msa:0.1.0}"
 SA="${SA:-spa-worker@spa-dev-499900.iam.gserviceaccount.com}"
 REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
@@ -26,7 +26,7 @@ REPO_REF="${REPO_REF:-main}"
 DISK_GB="${DISK_GB:-2000}"
 FASTA_GCS="${FASTA_GCS:?set FASTA_GCS=gs://... (the deduped design-sequence FASTA)}"
 OUT_GCS="${OUT_GCS:?set OUT_GCS=gs://... (destination prefix for the .a3m)}"
-PROBE_N="${PROBE_N:-8}"; PROBE_ONLY="${PROBE_ONLY:-0}"
+PROBE_N="${PROBE_N:-8}"; PROBE_ONLY="${PROBE_ONLY:-0}"; DB_SET="${DB_SET:-full}"
 NAME="${NAME:-spa-msagen-$(date -u +%Y%m%d-%H%M%S)}"
 GCLOUD="${GCLOUD:-gcloud}"
 
@@ -57,6 +57,8 @@ workerPoolSpecs:
           value: "${PROBE_N}"
         - name: PROBE_ONLY
           value: "${PROBE_ONLY}"
+        - name: DB_SET
+          value: "${DB_SET}"
 YAML
 
 echo ">>> CustomJobSpec (${CFG}):"; sed 's/^/    /' "${CFG}"
