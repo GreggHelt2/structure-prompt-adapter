@@ -72,7 +72,7 @@ MMSEQS="${MMSEQS:-$BIN/mmseqs}"
 command -v colabfold_search >/dev/null 2>&1 || { say "installing ColabFold (pip)"; pip install --quiet colabfold 2>&1 | tail -2; }
 if ! command -v ngc >/dev/null 2>&1; then
   say "installing NGC CLI"
-  dl https://ngc.nvidia.com/downloads/ngccli_linux.zip "$WORK/ngccli.zip" && unz "$WORK/ngccli.zip" "$WORK"
+  dl https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/3.64.2/files/ngccli_linux.zip "$WORK/ngccli.zip" && unz "$WORK/ngccli.zip" "$WORK"
   ln -sf "$WORK/ngc-cli/ngc" "$BIN/ngc"
 fi
 # NGC auth: the SAME spa-ngc-key secret the cache-gen job used to pull CDDB from NGC.
