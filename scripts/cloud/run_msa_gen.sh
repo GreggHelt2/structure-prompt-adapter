@@ -25,19 +25,26 @@ PROBE_ONLY="${PROBE_ONLY:-0}"                                       # 1 -> stop 
 # so this normally lands on the 2 TB pd-ssd (slower streaming; the PROBE below measures whether that hurts).
 say "DISK DIAGNOSTIC:"; { lsblk -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null; df -h 2>/dev/null; \
   mount 2>/dev/null | grep -iE "ssd|nvme|md[0-9]|local"; } | sed 's/^/  /' || true
+NEED_GB="${MIN_FREE_GB:-1750}"                                      # ~1.66 TB DBs + working set
+# Pick the FIRST writable mount with >= NEED_GB free, checking fast local NVMe first. MEASURED on the a3
+# (2026-09-11): the ~750 GB local-NVMe RAID0 (md0) mounts at / and /cache (~680 GB free, too small), while
+# the 2 TB pd-ssd (bootDiskSizeGb) surfaces at /var/log-storage (~2 TB free) -> the DBs land there.
+freeof(){ df -BG "$1" 2>/dev/null | awk 'NR==2{gsub(/[A-Za-z]/,"",$4);print $4}'; }
 if [ -z "${SCRATCH:-}" ]; then
-  for cand in /mnt/local_ssd /mnt/disks/local_ssd /mnt/disks/ssd0 /mnt/stateful_partition; do
-    if mount 2>/dev/null | grep -q " on $cand " && [ -w "$cand" ]; then SCRATCH="$cand"; break; fi
+  for cand in /mnt/local_ssd /mnt/disks/local_ssd /mnt/disks/ssd0 /cache /var/log-storage /workspace; do
+    [ -d "$cand" ] && [ -w "$cand" ] || continue
+    f=$(freeof "$cand"); [ -n "$f" ] || continue
+    say "  candidate $cand: ${f} GB free (need ${NEED_GB})"
+    if [ "$f" -ge "$NEED_GB" ]; then SCRATCH="$cand"; break; fi
   done
 fi
 SCRATCH="${SCRATCH:-/workspace}"
-WORK="$SCRATCH/msa_work"; mkdir -p "$WORK"
-DB_DIR="$WORK/colabfold_db"; MSA_OUT="$WORK/msas"; mkdir -p "$MSA_OUT"
-NEED_GB="${MIN_FREE_GB:-1750}"                                      # ~1.66 TB DBs + working set
-FREE_GB=$(df -BG "$SCRATCH" 2>/dev/null | awk 'NR==2{gsub(/[A-Za-z]/,"",$4); print $4}')
+WORK="$SCRATCH/msa_work"; mkdir -p "$WORK" 2>/dev/null
+DB_DIR="$WORK/colabfold_db"; MSA_OUT="$WORK/msas"; mkdir -p "$MSA_OUT" 2>/dev/null
+FREE_GB=$(freeof "$SCRATCH")
 say "SCRATCH=$SCRATCH  free=${FREE_GB:-?} GB  need>=${NEED_GB} GB"
-if [ -n "${FREE_GB:-}" ] && [ "$FREE_GB" -lt "$NEED_GB" ]; then
-  say "FATAL: scratch too small (${FREE_GB} < ${NEED_GB} GB) for the 1.66 TB DBs -- bump DISK_GB (pd-ssd) or use a larger-local-SSD machine. Aborting before any spend."
+if [ -z "${FREE_GB:-}" ] || [ "$FREE_GB" -lt "$NEED_GB" ]; then
+  say "FATAL: no writable mount has >= ${NEED_GB} GB free -- bump DISK_GB (pd-ssd) or use a larger-local-SSD machine. Aborting before any spend."
   exit 1
 fi
 
