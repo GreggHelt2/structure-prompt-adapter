@@ -14,7 +14,7 @@ RUN curl -fsSL https://mmseqs.com/latest/mmseqs-linux-gpu.tar.gz | tar xz -C /op
 # NGC CLI (pulls the pre-indexed GPU databases)
 RUN cd /opt \
  && curl -fsSL -o ngccli.zip https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/3.64.2/files/ngccli_linux.zip \
- && unzip -q ngccli.zip && ln -sf /opt/ngc-cli/ngc /usr/local/bin/ngc && rm -f ngccli.zip
+ && unzip -q -o ngccli.zip && ln -sf /opt/ngc-cli/ngc /usr/local/bin/ngc && rm -f ngccli.zip
 
 # ColabFold (provides colabfold_search). Torch conflicts are irrelevant: this image only runs MSA.
 RUN pip install --no-cache-dir colabfold
