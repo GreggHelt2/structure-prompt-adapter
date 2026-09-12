@@ -134,7 +134,7 @@ if [ ! -f "$DB_DIR/.DB_OK" ]; then
     # refuse to hydrate a missing OR INCOMPLETE cache: .DB_OK is written LAST by the cache push, so its
     # presence means the whole DB is up. Without this a mid-push cache would hydrate partially.
     gcloud storage ls "$DB_GCS/$DB_SET/colabfold_db/.DB_OK" >/dev/null 2>&1 \
-      || { say "FATAL: no .DB_OK at $DB_GCS/$DB_SET/colabfold_db/ — cache missing or still uploading (run CACHE_ONLY=1 DB_SRC=ngc first and let it reach SUCCEEDED)"; exit 1; }
+      || { say "FATAL: no .DB_OK at $DB_GCS/$DB_SET/colabfold_db/ : cache missing or still uploading (run CACHE_ONLY=1 DB_SRC=ngc first and let it reach SUCCEEDED)"; exit 1; }
     t=$(date +%s)
     gcloud storage rsync --recursive "$DB_GCS/$DB_SET/colabfold_db" "$DB_DIR" \
       || { say "FATAL: GCS hydrate failed from $DB_GCS/$DB_SET/colabfold_db"; exit 1; }
