@@ -24,9 +24,20 @@ REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
 # DECISION: ~1.5 TB DBs + makepaddedseqdb output + working set. 2000 GB pd-ssd is the starting point.
 DISK_GB="${DISK_GB:-2000}"
-FASTA_GCS="${FASTA_GCS:?set FASTA_GCS=gs://... (the deduped design-sequence FASTA)}"
-OUT_GCS="${OUT_GCS:?set OUT_GCS=gs://... (destination prefix for the .a3m)}"
 PROBE_N="${PROBE_N:-8}"; PROBE_ONLY="${PROBE_ONLY:-0}"; DB_SET="${DB_SET:-full}"
+# DB source + one-time cache knobs (see run_msa_gen.sh):
+#   DB_SRC=ngc  + DB_GCS + CACHE_ONLY=1  -> pull uniref30 from NGC ONCE, mirror to GCS, stop (the cache job)
+#   DB_SRC=gcs  + DB_GCS                 -> hydrate the DB from that GCS cache (fast), then probe/search
+DB_SRC="${DB_SRC:-ngc}"; DB_GCS="${DB_GCS:-}"; CACHE_ONLY="${CACHE_ONLY:-0}"
+if [ "$CACHE_ONLY" = 1 ]; then
+  # cache-once: no query FASTA / output prefix needed; DB_GCS is the mirror target.
+  FASTA_GCS="${FASTA_GCS:-gs://unused}"; OUT_GCS="${OUT_GCS:-gs://unused}"
+  [ -n "$DB_GCS" ] || { echo "FATAL: set DB_GCS=gs://... (cache target) when CACHE_ONLY=1" >&2; exit 1; }
+else
+  FASTA_GCS="${FASTA_GCS:?set FASTA_GCS=gs://... (the deduped design-sequence FASTA)}"
+  OUT_GCS="${OUT_GCS:?set OUT_GCS=gs://... (destination prefix for the .a3m)}"
+  [ "$DB_SRC" != gcs ] || [ -n "$DB_GCS" ] || { echo "FATAL: DB_SRC=gcs needs DB_GCS=gs://..." >&2; exit 1; }
+fi
 NAME="${NAME:-spa-msagen-$(date -u +%Y%m%d-%H%M%S)}"
 GCLOUD="${GCLOUD:-gcloud}"
 
@@ -59,12 +70,18 @@ workerPoolSpecs:
           value: "${PROBE_ONLY}"
         - name: DB_SET
           value: "${DB_SET}"
+        - name: DB_SRC
+          value: "${DB_SRC}"
+        - name: DB_GCS
+          value: "${DB_GCS}"
+        - name: CACHE_ONLY
+          value: "${CACHE_ONLY}"
 YAML
 
 echo ">>> CustomJobSpec (${CFG}):"; sed 's/^/    /' "${CFG}"
 echo ">>> name=${NAME} region=${REGION} disk=${DISK_GB}GB fasta=${FASTA_GCS} out=${OUT_GCS} probe_only=${PROBE_ONLY}"
 if [ "${DRY_RUN:-0}" = "1" ]; then
-  echo ">>> DRY_RUN=1 — not submitting. Real command:"
+  echo ">>> DRY_RUN=1: not submitting. Real command:"
   echo "    ${GCLOUD} ai custom-jobs create --project=${PROJECT} --region=${REGION} --display-name=${NAME} --service-account=${SA} --config=${CFG}"
   exit 0
 fi
