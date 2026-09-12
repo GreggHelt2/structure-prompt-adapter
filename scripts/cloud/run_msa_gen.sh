@@ -73,6 +73,12 @@ fi
 # ⚠️ This runtime install is the least-validated part of the probe -> it runs FIRST so a failure costs
 # seconds, not the ~1 h DB pull that follows.
 BIN="$WORK/bin"; mkdir -p "$BIN"; export PATH="$BIN:/usr/local/nvidia/bin:$PATH"  # nvidia-smi lives under /usr/local/nvidia/bin on the DLVM
+# ⭐ Put the REAL Vertex-injected driver libs FIRST on the loader path. Without this, mmseqs-gpu loads an
+# older CUDA-12.x libcuda (torch's bundled nvidia libs are in the image) and dies with "CUDA driver
+# version is insufficient for CUDA runtime version" even though the host driver (580.x, CUDA 13.0) is
+# newer than mmseqs needs. The lib64 dir is also why nvidia-smi could not find libnvidia-ml.so.
+export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:${LD_LIBRARY_PATH:-}"
+say "GPU ENV: driver=$(sed -n 's/.*Module for x86_64  *\([0-9.]*\).*/\1/p' /proc/driver/nvidia/version 2>/dev/null || echo '?')  libcuda=$(ldconfig -p 2>/dev/null | grep -m1 'libcuda.so.[0-9]' | sed 's/.*=> //' || echo '?')"
 # CACHE_ONLY / DB_SRC=gcs need only ngc+gcloud (cache) or gcloud (hydrate), NOT the GPU search tools.
 NEED_SEARCH=1; [ "$CACHE_ONLY" = 1 ] && NEED_SEARCH=0
 # download helper: the spa-cloud image lacks wget -> curl, then wget, then python urllib.
