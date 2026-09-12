@@ -193,18 +193,26 @@ say "flattened $nflat NGC DB files into $DB_DIR (symlinks) so colabfold_search f
 gcloud storage cp "$FASTA_GCS" "$WORK/query.fasta"
 NSEQ=$(grep -c '^>' "$WORK/query.fasta"); say "query.fasta: $NSEQ sequences"
 
+# colabfold_search DB selection (VERIFIED against colabfold/mmseqs/search.py, 2026-09-11):
+#   db1 = uniref30_2302_db (always searched); db3 = colabfold_envdb_202108_db, the METAGENOMIC db,
+#   searched by default because --use-env defaults to 1; db2 = TEMPLATES (off unless --use-templates).
+# So for a uniref30-only cache we must pass --use-env 0, or colabfold looks for the (uncached) envdb and
+# dies with "Database colabfold_envdb_202108_db does not exist". For DB_SET=full both are present -> leave on.
+CF_ENV=(); [ "$DB_SET" = uniref30 ] && CF_ENV=(--use-env 0)
+say "colabfold DB args: DB_SET=$DB_SET -> ${CF_ENV[*]:-(uniref30+envdb)}"
+
 # ---- 4. THROUGHPUT PROBE (§5.8b): the number that decides hours-vs-weeks. Gate the full run on it. ----
 head -$((PROBE_N*2)) "$WORK/query.fasta" > "$WORK/probe.fasta"
 say "PROBE: colabfold_search --gpu 1 on $PROBE_N sequences"
 t0=$(date +%s)
-colabfold_search --mmseqs "$MMSEQS" --gpu 1 "$WORK/probe.fasta" "$DB_DIR" "$WORK/probe_msas"
+colabfold_search --mmseqs "$MMSEQS" --gpu 1 "${CF_ENV[@]}" "$WORK/probe.fasta" "$DB_DIR" "$WORK/probe_msas"
 dt=$(( $(date +%s) - t0 ))
 say "PROBE done: ${dt}s for $PROBE_N seqs = $(awk "BEGIN{print $dt/$PROBE_N}") s/seq ; full set ~$(awk "BEGIN{print $dt/$PROBE_N*$NSEQ/3600}") h"
 if [ "$PROBE_ONLY" = 1 ]; then say "PROBE_ONLY=1 -> stopping. Review the rate before the full run."; exit 0; fi
 
 # ---- 5. full search ----
 say "colabfold_search --gpu 1 over $NSEQ sequences"
-colabfold_search --mmseqs "$MMSEQS" --gpu 1 "$WORK/query.fasta" "$DB_DIR" "$MSA_OUT"
+colabfold_search --mmseqs "$MMSEQS" --gpu 1 "${CF_ENV[@]}" "$WORK/query.fasta" "$DB_DIR" "$MSA_OUT"
 
 # ---- 6. push ONLY the alignments (the durable artifact; DBs are discarded with the instance) ----
 say "pushing .a3m to $OUT_GCS"
