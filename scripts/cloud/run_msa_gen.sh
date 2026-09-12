@@ -104,6 +104,11 @@ if [ "$DB_SRC" = ngc ]; then
     export NGC_CLI_API_KEY
   fi
   export NGC_API_KEY="${NGC_API_KEY:-$NGC_CLI_API_KEY}"
+  # NGC org: the colabfold NIM model's entitlement is ORG-SCOPED (cache-gen's org=nvidia works only for
+  # public NVIDIA resources like CDDB). Fetched from Secret Manager (spa-ngc-org) to keep the private org
+  # id out of the public repo; the download fails with "Missing org" without it.
+  export NGC_CLI_ORG="${NGC_CLI_ORG:-$(gcloud secrets versions access latest --secret=spa-ngc-org --project="$PROJECT" 2>/dev/null || true)}"
+  [ -n "${NGC_CLI_ORG:-}" ] || { say "FATAL: no NGC_CLI_ORG (secret spa-ngc-org): the NIM model download needs an org"; exit 1; }
 fi
 GPU="$(command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader | head -1 || echo n/a)"
 say "DB_SRC=$DB_SRC CACHE_ONLY=$CACHE_ONLY  mmseqs=${MMSEQS:-n/a}  colabfold_search=$(command -v colabfold_search || echo n/a)  ngc=$(command -v ngc || echo n/a)  GPU=$GPU"
