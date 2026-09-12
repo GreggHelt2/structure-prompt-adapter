@@ -178,9 +178,16 @@ if [ "$CACHE_ONLY" = 1 ]; then
   say "CACHE_ONLY=1 -> DB cached to $DB_GCS/$DB_SET/. Stopping before any search. DONE."
   exit 0
 fi
-# VERIFY: confirm `colabfold_search --gpu 1` consumes the NGC-packaged DB layout directly (these are packaged
-# for NVIDIA's MSA-Search NIM gpuserver). If not, the fallback is to run the MSA-Search NIM microservice on
-# this H100 and POST query.fasta to it (it bundles these same pre-indexed DBs + the GPU search + an API).
+# ---- 1c. flatten the NGC nesting for colabfold_search. ----
+# colabfold_search expects every DB file directly in ONE db-dir (it builds <db_dir>/<db1> where db1
+# defaults to uniref30_2302_db), but the NGC packages NEST them under <model>_v<ver>/<shortname>/.
+# VERIFIED 2026-09-11: a search pointed at $DB_DIR failed with "Database uniref30_2302_db does not exist".
+# Symlink every nested DB file up into $DB_DIR so --db1/--db2 resolve, for one OR both DBs.
+nflat=0
+while IFS= read -r f; do ln -sf "$f" "$DB_DIR/$(basename "$f")" && nflat=$((nflat+1)); done \
+  < <(find "$DB_DIR" -mindepth 2 -type f 2>/dev/null)
+say "flattened $nflat NGC DB files into $DB_DIR (symlinks) so colabfold_search finds uniref30_2302_db etc."
+[ "$nflat" -gt 0 ] || { say "FATAL: no DB files found to flatten under $DB_DIR (unexpected NGC layout)"; exit 1; }
 
 # ---- 3. input FASTA ----
 gcloud storage cp "$FASTA_GCS" "$WORK/query.fasta"
