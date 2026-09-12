@@ -29,6 +29,7 @@ DB_SRC="${DB_SRC:-ngc}"                                             # ngc | gcs.
 DB_GCS="${DB_GCS:-}"                                                # gs:// prefix for the cached GPU-indexed DBs (e.g. gs://genomancer-spa-cache/msa/db).
                                                                     #   used as the SOURCE when DB_SRC=gcs, and as the cache TARGET after an NGC pull when set + DB_SRC=ngc
 CACHE_ONLY="${CACHE_ONLY:-0}"                                       # 1 -> after the DB is placed and cached to DB_GCS, STOP (the one-time NGC->GCS cache run; no search)
+PROJECT="${PROJECT:-spa-dev-499900}"                               # for gcloud secrets access on the instance (bare container has no default project)
 # ---- scratch: prefer the a3 local-NVMe RAID0 (fast, as train/cache-gen do); else pd-ssd /workspace ----
 # Mirrors run_cache_gen.sh / run_train.sh: the a3 local SSD is auto-RAID0'd by the DLVM and is NOT declared
 # in the Vertex spec (which only sets the pd-ssd boot disk). We detect it at runtime and PRINT a diagnostic
@@ -93,8 +94,16 @@ if [ "$DB_SRC" = ngc ]; then
     dl https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/3.64.2/files/ngccli_linux.zip "$WORK/ngccli.zip" && unz "$WORK/ngccli.zip" "$WORK"
     ln -sf "$WORK/ngc-cli/ngc" "$BIN/ngc"
   fi
-  # NGC auth: the SAME spa-ngc-key secret the cache-gen job used to pull CDDB from NGC.
-  export NGC_API_KEY="${NGC_API_KEY:-$(gcloud secrets versions access latest --secret=spa-ngc-key 2>/dev/null || true)}"
+  # NGC auth: the SAME spa-ngc-key secret + pattern the cache-gen job uses (run_cache_gen.sh:58).
+  # ⚠️ --project is REQUIRED: a bare Vertex container has no default gcloud project, so without it the
+  # fetch errors and (previously, silenced by 2>/dev/null) left the key empty. The NGC CLI reads
+  # NGC_CLI_API_KEY, not NGC_API_KEY, so set that one (keep NGC_API_KEY too for this script's guard).
+  if [ -z "${NGC_CLI_API_KEY:-}" ]; then
+    NGC_CLI_API_KEY="$(gcloud secrets versions access latest --secret=spa-ngc-key --project="$PROJECT" 2>"$WORK/secret.err")" \
+      || { say "FATAL: could not read secret spa-ngc-key (project $PROJECT): $(cat "$WORK/secret.err" 2>/dev/null)"; exit 1; }
+    export NGC_CLI_API_KEY
+  fi
+  export NGC_API_KEY="${NGC_API_KEY:-$NGC_CLI_API_KEY}"
 fi
 GPU="$(command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader | head -1 || echo n/a)"
 say "DB_SRC=$DB_SRC CACHE_ONLY=$CACHE_ONLY  mmseqs=${MMSEQS:-n/a}  colabfold_search=$(command -v colabfold_search || echo n/a)  ngc=$(command -v ngc || echo n/a)  GPU=$GPU"
