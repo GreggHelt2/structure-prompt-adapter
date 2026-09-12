@@ -8,7 +8,8 @@
 # resolve, 41 MB pulled in 20 s, 2026-09-11); the probe itself has not completed end to end yet.
 #
 # DB SOURCE (DB_SRC): the NGC DBs come pre-indexed for GPU, so NO makepaddedseqdb step. Two sources:
-#   ngc  -> pull from NVIDIA NGC (~1 h full / ~15 min uniref30). Set DB_GCS to ALSO mirror the DB to GCS.
+#   ngc  -> pull from NVIDIA NGC. VERIFIED sizes 2026-09-11 (ngc registry model info): uniref30 = 454.89 GB
+#           / 28 files, pulled in 64.5 min; envdb = 596.04 GB; full (both) ~1.05 TB. Set DB_GCS to mirror to GCS.
 #   gcs  -> hydrate the DB from that GCS cache instead (same-region, ~minutes, free egress).
 # CACHE_ONLY=1 (with DB_SRC=ngc + DB_GCS) makes this a one-time NGC->GCS cache job: pull, mirror, STOP.
 #
@@ -33,8 +34,9 @@ PROJECT="${PROJECT:-spa-dev-499900}"                               # for gcloud 
 # ---- scratch: prefer the a3 local-NVMe RAID0 (fast, as train/cache-gen do); else pd-ssd /workspace ----
 # Mirrors run_cache_gen.sh / run_train.sh: the a3 local SSD is auto-RAID0'd by the DLVM and is NOT declared
 # in the Vertex spec (which only sets the pd-ssd boot disk). We detect it at runtime and PRINT a diagnostic
-# so the real local-SSD size is visible. ⚠️ Our local NVMe is ~750 GB, which does NOT fit the 1.66 TB DBs,
-# so this normally lands on the 2 TB pd-ssd (slower streaming; the PROBE below measures whether that hurts).
+# so the real local-SSD size is visible. ⚠️ VERIFIED sizes (2026-09-11): uniref30 = 455 GB, which FITS the
+# ~677 GB local NVMe; full (uniref30+envdb) = ~1.05 TB, which does NOT and lands on the 2 TB pd-ssd. (Both
+# figures are the NGC pre-indexed GPU-padded package, NOT the smaller plain-format numbers.)
 say "DISK DIAGNOSTIC:"; { lsblk -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null; df -h 2>/dev/null; \
   mount 2>/dev/null | grep -iE "ssd|nvme|md[0-9]|local"; } | sed 's/^/  /' || true
 DB_SET="${DB_SET:-full}"

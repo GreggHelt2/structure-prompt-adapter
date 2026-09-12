@@ -22,7 +22,8 @@ IMAGE="${IMAGE:-us-central1-docker.pkg.dev/spa-dev-499900/spa/spa-msa:0.1.0}"
 SA="${SA:-spa-worker@spa-dev-499900.iam.gserviceaccount.com}"
 REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
 REPO_REF="${REPO_REF:-main}"
-# DECISION: ~1.5 TB DBs + makepaddedseqdb output + working set. 2000 GB pd-ssd is the starting point.
+# DISK: verified NGC sizes (2026-09-11): uniref30 455 GB, full (uniref30+envdb) ~1.05 TB. NGC DBs are
+# pre-indexed (no makepaddedseqdb). 2000 GB pd-ssd fits the full set with headroom; uniref30 fits local NVMe.
 DISK_GB="${DISK_GB:-2000}"
 PROBE_N="${PROBE_N:-8}"; PROBE_ONLY="${PROBE_ONLY:-0}"; DB_SET="${DB_SET:-full}"
 # DB source + one-time cache knobs (see run_msa_gen.sh):
