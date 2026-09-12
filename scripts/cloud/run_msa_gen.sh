@@ -131,9 +131,13 @@ if [ ! -f "$DB_DIR/.DB_OK" ]; then
   mkdir -p "$DB_DIR"
   if [ "$DB_SRC" = gcs ]; then
     say "hydrating GPU-indexed DBs from GCS cache $DB_GCS/$DB_SET (same-region, fast)"
+    # refuse to hydrate a missing OR INCOMPLETE cache: .DB_OK is written LAST by the cache push, so its
+    # presence means the whole DB is up. Without this a mid-push cache would hydrate partially.
+    gcloud storage ls "$DB_GCS/$DB_SET/colabfold_db/.DB_OK" >/dev/null 2>&1 \
+      || { say "FATAL: no .DB_OK at $DB_GCS/$DB_SET/colabfold_db/ — cache missing or still uploading (run CACHE_ONLY=1 DB_SRC=ngc first and let it reach SUCCEEDED)"; exit 1; }
     t=$(date +%s)
     gcloud storage rsync --recursive "$DB_GCS/$DB_SET/colabfold_db" "$DB_DIR" \
-      || { say "FATAL: GCS hydrate failed from $DB_GCS/$DB_SET/colabfold_db (run the cache-once job first: CACHE_ONLY=1 DB_SRC=ngc DB_GCS=$DB_GCS)"; exit 1; }
+      || { say "FATAL: GCS hydrate failed from $DB_GCS/$DB_SET/colabfold_db"; exit 1; }
     say "  hydrate done in $(( $(date +%s) - t ))s"
   else
     say "pulling NGC pre-indexed GPU DBs into $DB_DIR (no makepaddedseqdb needed)"
@@ -148,8 +152,10 @@ if [ ! -f "$DB_DIR/.DB_OK" ]; then
 fi
 
 # ---- 1a. one-time cache: after an NGC pull, mirror the GPU-indexed DB tree to GCS so later runs hydrate. ----
-# rsync carries the local .DB_OK marker to GCS, which is both the "already cached" sentinel here and the
-# "trust this cache" sentinel the DB_SRC=gcs branch above hydrates.
+# ⚠️ .DB_OK is the completion sentinel and MUST be uploaded LAST: a plain rsync of the whole dir uploads
+# it early (arbitrary order), so it can appear while the big DB blobs are still uploading, and a
+# DB_SRC=gcs run would then hydrate a partial cache. So: rsync everything WITHOUT the sentinel, then cp
+# the sentinel as the final object.
 if [ "$DB_SRC" = ngc ] && [ -n "${DB_GCS:-}" ]; then
   DST="$DB_GCS/$DB_SET/colabfold_db"
   if gcloud storage ls "$DST/.DB_OK" >/dev/null 2>&1; then
@@ -157,9 +163,13 @@ if [ "$DB_SRC" = ngc ] && [ -n "${DB_GCS:-}" ]; then
   else
     say "caching GPU-indexed DB tree to $DST/ (one-time; $(du -sh "$DB_DIR" 2>/dev/null | cut -f1) local)"
     t=$(date +%s)
+    mv -f "$DB_DIR/.DB_OK" "$WORK/.DB_OK.pending" 2>/dev/null || true   # keep the sentinel OUT of the bulk rsync
     gcloud storage rsync --recursive "$DB_DIR" "$DST" \
       || { say "FATAL: cache push (rsync) to $DST/ failed"; exit 1; }
-    say "  cache push done in $(( $(date +%s) - t ))s -> $DST/  (.DB_OK mirrored)"
+    mv -f "$WORK/.DB_OK.pending" "$DB_DIR/.DB_OK" 2>/dev/null || touch "$DB_DIR/.DB_OK"
+    gcloud storage cp "$DB_DIR/.DB_OK" "$DST/.DB_OK" \
+      || { say "FATAL: cache sentinel upload failed (DB is up but unmarked; a gcs hydrate will refuse it)"; exit 1; }
+    say "  cache push done in $(( $(date +%s) - t ))s -> $DST/  (.DB_OK written LAST)"
   fi
 fi
 if [ "$CACHE_ONLY" = 1 ]; then
