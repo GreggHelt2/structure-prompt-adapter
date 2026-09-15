@@ -238,6 +238,15 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
                 "num_designs": _plain(ev.get("num_designs", None)),
                 "length": _plain(ev.get("length", None)),
                 "seed": _plain(ev.get("seed", None)),
+                # ⭐ `seeds` and `motif`, added 2026-09-15, both load-bearing and both previously absent.
+                # `seeds`: under the K=1 convention a design's identity IS its seed (dev plan/100), so a
+                # record with `num_designs: 1` and no seed list does not say how many designs ran.
+                # `motif`: its absence made a reader conclude that a hard⊕soft run pinned NO motif
+                # (dev results/55 §4.3). It pins one; this block simply never echoed it. With a motif
+                # active, `length` above is inert because generate.py takes the length from the contig,
+                # which is a second thing this record could not previously show.
+                "seeds": _plain(ev.get("seeds", None)),
+                "motif": _plain(ev.get("motif", None)),
                 "out_dir": str(ev.get("out_dir", "")),
             }
             rec["sampler_requested"] = {k: _plain(ev.get(k, None))

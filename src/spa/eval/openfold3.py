@@ -172,9 +172,30 @@ class OF3Refolder:
         """One single-chain protein query per sequence, keyed ``q{i}`` (dev ``05`` schema)."""
         return {"queries": {f"q{i}": self._chain(s) for i, s in enumerate(sequences)}}
 
+    @staticmethod
+    def _shim_path() -> Path:
+        return Path(__file__).resolve().parents[3] / "scripts" / "eval" / "of3_determinism_patch.py"
+
+    @classmethod
+    def of3_contract(cls) -> int | None:
+        """The determinism CONTRACT the shim would apply, for a run's provenance.
+
+        WHY: runs made under different contracts are different draws and must never be pooled
+        per-structure, but the shim runs as a SUBPROCESS so nothing importable carries its version.
+        Measured 2026-09-15 (dev results/55 §4.3): refold provenance recorded `deterministic: true`
+        and no contract, so v2 had to be reconstructed from git history instead of read from the run.
+        Parsed rather than imported because the shim pulls OpenFold3's heavy deps at import.
+        """
+        import re
+        try:
+            m = re.search(r"^CONTRACT\s*=\s*(\d+)", cls._shim_path().read_text(), re.M)
+        except OSError:
+            return None
+        return int(m.group(1)) if m else None
+
     def _build_command(self, query_json: Path, run_dir: Path) -> list[str]:
         if self.deterministic:
-            shim = Path(__file__).resolve().parents[3] / "scripts" / "eval" / "of3_determinism_patch.py"
+            shim = self._shim_path()
             head = ["python", str(shim)]
         elif self.batch_patch_shim:
             head = ["python", self.batch_patch_shim]
