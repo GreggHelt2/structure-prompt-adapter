@@ -641,6 +641,20 @@ def build_motif(cfg):
         n_un = len([t for t in str(unindex).replace(" ", "").split(",") if t])
         where = f"{n_un} unindexed (model-placed) residues, length {length} (unindex {str(unindex)!r})"
 
+    # Forward `is_non_loopy` onto the spec itself (dev plan/81 §3a).
+    # WHY: when a motif is active, `eval.specification` is inert, because RFD3's
+    # `_canonicalize_inputs` does not merge `specification_overrides` onto a built spec (see this
+    # function's docstring). Setting it there composes cleanly, appears in the Hydra snapshot, and
+    # never reaches the model: a 240-design run came back bit-identical across both arms before this
+    # line existed. RFD3 itself imposes no motif/flag exclusion; the field is
+    # `DesignInputSpecification.is_non_loopy` (`input_parsing.py:189`).
+    # Unset leaves RFD3's default `None`, a third state distinct from `False`, so existing runs are
+    # byte-identical.
+    if m.get("is_non_loopy") is not None:
+        spec_kwargs["is_non_loopy"] = bool(m["is_non_loopy"])
+        print(f"[generate] motif: is_non_loopy={spec_kwargs['is_non_loopy']} set ON THE SPEC "
+              f"(not via eval.specification, which a motif makes inert)")
+
     spec = DesignInputSpecification(**spec_kwargs)
     atom_note = "" if not isinstance(fixed_atoms, dict) else f", atom-level ({len(fixed_atoms)} sel)"
     print(f"[generate] motif: {where} from {m['source_pdb']}{atom_note}")
