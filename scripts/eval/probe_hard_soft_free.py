@@ -387,7 +387,8 @@ def run_grid(args):
             "hardware": {"device": device},
             "model": base_model, "variant": base_variant,
             "eval": {"num_designs": K, "length": None, "specification": None,
-                     **_sampler, "seed": int(args.seed), "ckpt": args.ckpt,
+                     **_sampler, "deterministic": bool(getattr(args, "deterministic", False)),
+                     "seed": int(args.seed), "ckpt": args.ckpt,
                      "out_dir": str(out_dir), "motif": {"source_pdb": motif_pdb, "contig": contig}},
         })
         motif_spec, M_idx, U_idx, C_idx, L, _cr = build_partition(
@@ -529,6 +530,9 @@ def main():
     ap.add_argument("--lambdas", default=None, help="comma list of λ to sweep (overrides --lambda), e.g. 1,2,3")
     ap.add_argument("--num-designs", type=int, default=8, help="K designs (paired noise)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--deterministic", action="store_true",
+                    help="opt-in bitwise determinism: sets eval.deterministic, which build_eval_engine "
+                         "applies (RFD3 index_reduce shim, dev plan/91). Default off = byte-identical to prior runs.")
     ap.add_argument("--num-timesteps", type=int, default=None,
                     help="DEPRECATED, use --sampler-arm. Kept so recorded invocations still run; it is "
                          "rejected if it disagrees with the selected arm (spa.eval.sampler_arms).")

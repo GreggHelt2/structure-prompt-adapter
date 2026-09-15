@@ -67,6 +67,13 @@ def main():
                     help="OF3 refold batch_size. >1 forces the of3_nokernel.yml base + the of3_batch_patch.py "
                          "shim (the triton kernels CANNOT batch — evoformer.py:915); ~2.5x at bs=8, folds "
                          "equivalent (dev 23 §7.8). bs=1 = original per-fold behavior, unchanged.")
+    ap.add_argument("--deterministic", action="store_true",
+                    help="opt-in bitwise determinism: OF3 refold via torch's deterministic scatter_add "
+                         "(dev plan/91). Requires bs=1 (the default); OF3Refolder refuses it with --of3-batch-size>1.")
+    ap.add_argument("--use-msa-server", action="store_true",
+                    help="fetch a ColabFold MSA per sequence (api.colabfold.com) instead of MSA-free "
+                         "(the project default). GPU-free NETWORK step; the fold itself is ~1.01x. NOT part "
+                         "of the reproducibility identity (server DBs change) — for the MSA-vs-noMSA experiment (dev plan/96).")
     ap.add_argument("--out-dir", default=str(_OUTPUTS_ROOT / "_incoming" / "threeway_designability"))
     args = ap.parse_args()
 
@@ -157,7 +164,8 @@ def main():
               f"(~2.5x at bs=8, folds equivalent — dev 23 §7.8)")
     refolder = OF3Refolder(ckpt_path=cfg.paths.openfold3_ckpt, runner_yaml=of3_runner_yaml,
                            out_dir=str(out_dir / "of3"), conda_env=args.of3_conda_env,
-                           batch_patch_shim=batch_shim)
+                           batch_patch_shim=batch_shim, deterministic=bool(args.deterministic),
+                           use_msa_server=bool(args.use_msa_server))
     refolds_by_name = refolder.refold_all([ss for ss in seqsets if ss is not None])
 
     # Stage 4 — score (designability scRMSD + refold-side motif survival)
