@@ -1144,6 +1144,11 @@ def generate(cfg, *, engine=None, adapter=None) -> list[Design]:
     # exactly zero cases of two configs sharing one, so that half of the invariant is holding.
     seeds = _normalize_seeds(ev)
     multi_seed = len(seeds) > 1
+    # ⭐ State the DRAW COUNT, because it is the statistical n and it is not K (dev plan/100 §1).
+    # K is the diffusion batch; a cell's sample size is |distinct(seeds)| × K. Conflating them is how
+    # plan/107 shipped "K=16" for a run whose K is 1, and nothing logged the real number.
+    print(f"[generate] draws_per_cell={len(seeds) * K} "
+          f"(K={K} diffusion batch × {len(seeds)} distinct seed(s))")
 
     designs: list[Design] = []
     for condition in conditions:

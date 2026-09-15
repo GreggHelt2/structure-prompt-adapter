@@ -4,7 +4,7 @@ Spec: dev ``05_validation_pipeline.md`` §1 ("Stage 3 — Refold (OpenFold3)") +
 across env boundaries) and dev ``07`` F1.5.4 (the no-kernel runner-yaml). This is the concrete
 implementation of the :class:`spa.eval.score.Refolder` protocol that the flywheel's Stage 3 injection
 point expects — turning a Stage-2 :class:`~spa.eval.proteinmpnn.SequenceSet` (the N designed sequences
-for one backbone) into N OpenFold3 **refold** structures for the best-of-K self-consistency scRMSD
+for one backbone) into N OpenFold3 **refold** structures for the best-of-N self-consistency scRMSD
 (designability) metric.
 
 How OF3 is driven (verified in Task 1.5 / dev ``05`` Stage 3):
@@ -54,7 +54,7 @@ class OF3Refolder:
         conda_env: env with the ``run_openfold`` entry point (default ``spa-verify-of3``); ``None`` ->
             current interpreter.
         num_diffusion_samples: OF3 diffusion samples per sequence (1 = one refold/sequence, the
-            best-of-K self-consistency unit; OF3's own default is 5).
+            best-of-N self-consistency unit; OF3's own default is 5).
         seed: the single model seed (must match the runner-yaml ``seeds: [seed]`` — drives the
             ``seed_{seed}`` output dir).
         structure_format: OF3 output structure format (``cif`` default; ``cif.gz`` / ``pdb``).
@@ -262,7 +262,7 @@ class OF3Refolder:
 
     def refold(self, sequence_set) -> list:
         """Refold ONE backbone's sequences (one ``run_openfold`` subprocess; model loads once). Returns
-        the cif paths that got written (a missing one is dropped + warned, so best-of-K just has fewer
+        the cif paths that got written (a missing one is dropped + warned, so best-of-N just has fewer
         candidates than poisoning the scRMSD with a bad path)."""
         name = getattr(sequence_set, "name", "design")
         sequences = list(getattr(sequence_set, "sequences", []) or [])

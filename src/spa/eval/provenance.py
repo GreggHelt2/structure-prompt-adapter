@@ -247,6 +247,8 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
                 # which is a second thing this record could not previously show.
                 "seeds": _plain(ev.get("seeds", None)),
                 "motif": _plain(ev.get("motif", None)),
+                # The derived sample size, named and recorded 2026-09-15 (dev plan/100 §1).
+                "draws_per_cell": _draws_per_cell(ev),
                 "out_dir": str(ev.get("out_dir", "")),
             }
             rec["sampler_requested"] = {k: _plain(ev.get(k, None))
@@ -305,6 +307,29 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
     if extra:
         rec["extra"] = _plain(extra)
     return rec
+
+
+def _draws_per_cell(ev) -> int | None:
+    """``|distinct(eval.seeds ?? [eval.seed])| * eval.num_designs``, or ``None`` if unreadable.
+
+    WHY THIS EXISTS. ``K`` (``num_designs``) is the diffusion BATCH and part of the reproducibility
+    identity; the number of designs one ``(condition, lambda)`` cell actually contributes is this
+    product, and it is the statistical n behind every rate and Fisher test in the results docs. It had
+    no name and no recorded field, so specs borrowed the letter K for it: dev ``plan/107`` shipped
+    saying "K=16" for a run whose K is 1. Definition: dev ``plan/100`` section 1.
+
+    ``_normalize_seeds`` is imported from the generator rather than reimplemented, because it DROPS
+    duplicate seeds; counting the raw list would overstate the draws. The import is deferred since
+    ``generate`` imports this module at load time.
+    """
+    try:
+        from .generate import _normalize_seeds
+        k = ev.get("num_designs", None)
+        if k is None:
+            return None
+        return len(_normalize_seeds(ev)) * int(k)
+    except Exception:
+        return None
 
 
 def _plain(v):

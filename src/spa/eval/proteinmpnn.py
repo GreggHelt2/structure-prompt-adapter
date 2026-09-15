@@ -49,7 +49,7 @@ class SequenceSet:
             ProteinMPNN's ``/`` chain separator; a monomer is a plain string.
         n_residues: residue count of the backbone (== ``len(seq)`` with any ``/`` removed).
         scores: per-sequence ProteinMPNN ``score`` (neg-log-prob; lower = more confident) parsed from
-            the FASTA headers, aligned with :attr:`sequences` — for downstream best-of-K (dev ``05`` §3).
+            the FASTA headers, aligned with :attr:`sequences` — for downstream best-of-N (dev ``05`` §3).
     """
 
     name: str
