@@ -59,13 +59,24 @@ K="${K:-4}"; NSEQ="${NSEQ:-4}"; LAM="${LAM:-1}"
 SEED="${SEED:-0}"
 # ⭐ OPTIONAL, added 2026-09-16 for dev plan/106 row 25. Both default to UNSET and append nothing when
 # unset, so every existing invocation of this harness stays byte-identical.
-# ⛔ WHY SEEDS EXISTS. K is the RFD3 DIFFUSION BATCH (eval.num_designs), and K>1 forfeits determinism:
-# its rows share one initial-noise draw. The deterministic convention is K=1 with one seed per draw
-# (dev plan/100 §9), and generate.py already implements the seed list natively (_normalize_seeds,
+# ⛔ WHY SEEDS EXISTS. K is the RFD3 DIFFUSION BATCH (eval.num_designs), and batch size sits inside the
+# REPRODUCIBILITY IDENTITY: D is the batch dimension of every matmul, so a different K selects
+# different cuBLAS kernels, and design *i* at K=4 differs from the same design at K=8 by up to 2.433 A.
+# A run at one K is therefore not comparable to a run at another. The deterministic convention is K=1
+# with one seed per draw, and generate.py already implements the seed list natively (_normalize_seeds,
 # :889-907, seed loop :1116-1165) with FOUR drivers passing it. This harness simply never exposed it.
-# ⇒ Setting SEEDS pins eval.num_designs=1 and hands the list through, so the draws are independent
-# rather than correlated batch rows, at ONE model load per cell because the loop lives inside
+# ⇒ Setting SEEDS pins eval.num_designs=1 and hands the list through, so design identity no longer
+# depends on how many designs were asked for, at ONE model load per cell because the loop lives inside
 # generate.py rather than out here.
+#
+# ⛔ CORRECTION 2026-09-16, same day this comment was first committed. It originally read "K>1 forfeits
+# determinism: its rows share one initial-noise draw", and said SEEDS made draws "independent rather
+# than correlated batch rows". That mechanism is WRONG: the shared-noise hypothesis was tested against
+# torch.randn(8,100,3)[0] at a fixed seed and rejected, and a K=25 cell measured 25 of 25 DISTINCT
+# structures. Every batch row gets its own noise. Only the reasoning changed; K=1 still stands, and
+# nothing about this script's behaviour changed with the correction.
+# ⚠️ NOT to be confused with the true claim just above about SEED: two ARMS at the same seed do share
+# initial noise, which is what makes the paired baseline-vs-SPA comparison valid.
 SEEDS="${SEEDS:-}"
 DETERMINISTIC="${DETERMINISTIC:-}"
 BAND="${BAND:-le256}"
