@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import os
+import pathlib
 from pathlib import Path
 
 # Run-artifact root — absolute + env-overridable, mirroring configs/paths/default.yaml's
@@ -174,13 +175,37 @@ def main():
                            out_dir=str(out_dir / "of3"), conda_env=args.of3_conda_env,
                            batch_patch_shim=batch_shim, deterministic=bool(args.deterministic),
                            use_msa_server=bool(args.use_msa_server))
-    refolds_by_name = refolder.refold_all([ss for ss in seqsets if ss is not None])
+    # ⛔ INDEX, NOT NAME. refold_all returns {design_name: [cifs]}, and a design's NAME IS NOT UNIQUE:
+    # this driver is routinely handed 16 backbones all called `free_free_0.pdb` (one per seed), so
+    # `out = {nm: [] for nm in names}` collapses them to ONE key and pours every design's refolds into
+    # it. Joining on the stem then scores each design against ALL of them, i.e. against other seeds'
+    # designs. MEASURED on the 2026-09-16 A2 run before this fix: a baseline arm read 15/16 and 16/16
+    # designable where the correct per-design answer is 9/16 and 9/16, with single-design scRMSD errors
+    # up to 16.4 A. It inflates whichever arm has more near-duplicate siblings, so it is not a wash.
+    # ⭐ The refold for (design i, sequence j) is at of3_batch/d{i}_q{j} by construction, so the index
+    # is authoritative and needs no names at all.
+    pairs = [(d, ss) for d, ss in zip(designs, seqsets) if ss is not None]
+    refolds_by_name = refolder.refold_all([ss for _, ss in pairs])
+    _batch_dir = pathlib.Path(refolder.out_dir) / "of3_batch"
+    _by_index = {}
+    for _i, (_d, _ss) in enumerate(pairs):
+        _cifs = []
+        for _j in range(int(args.num_seqs)):
+            _c = refolder._cif_path(_batch_dir, f"d{_i}_q{_j}")
+            if pathlib.Path(_c).exists():
+                _cifs.append(str(_c))
+        _by_index[id(_d)] = _cifs
+    _names = [getattr(ss, "name", None) for _, ss in pairs]
+    if len(set(_names)) != len(_names):
+        print(f"[desig] ⚠️ {len(_names) - len(set(_names))} design name collision(s) "
+              f"({len(set(_names))} distinct names for {len(_names)} designs). Refolds are joined BY "
+              f"INDEX, so scoring is correct; the name-keyed dict from refold_all is unusable here.")
 
     # Stage 4 — score (designability scRMSD + refold-side motif survival)
     print(f"\n{'design':<30}{'scRMSD(Å)':>10}{'designable':>12}{'pLDDT':>8}{'motifRMSD_design':>18}{'motifRMSD_refold':>18}")
     rows = []
     for d in designs:
-        refolds = refolds_by_name.get(d.path.stem)
+        refolds = _by_index.get(id(d))
         # ⛔ Truncate on the PARSED q index, never by slicing the list. refold_all appends
         # d{i}_q{j} in j order but SKIPS a cif that failed to appear, so a hole makes position
         # and sequence index diverge and refolds[:k] would quietly admit q8 while q3 is missing.
