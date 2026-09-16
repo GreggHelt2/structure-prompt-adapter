@@ -34,6 +34,9 @@
 #   SUBSET_IDS      comma list of prompt ids, for a smoke pass
 #   SEED            RFD3 sampler seed (default 0). Change it ONLY to extend an existing run with
 #                   fresh draws; see the note beside the variable.
+#   SEEDS           comma list of seeds, e.g. 0,1,2,3. Sets eval.num_designs=1 and passes the list to
+#                   eval.seeds, which is the K=1 deterministic convention (dev plan/100 §9). Overrides K.
+#   DETERMINISTIC   true -> eval.deterministic=true. Unset by default, so existing runs are unchanged.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # repo root (this file is scripts/eval/)
@@ -54,6 +57,17 @@ K="${K:-4}"; NSEQ="${NSEQ:-4}"; LAM="${LAM:-1}"
 # DIFFERENT seed draws K new ones and pools honestly to 2K. Both arms of one run must share a seed,
 # because the paired baseline-vs-SPA comparison relies on them sharing initial noise.
 SEED="${SEED:-0}"
+# ⭐ OPTIONAL, added 2026-09-16 for dev plan/106 row 25. Both default to UNSET and append nothing when
+# unset, so every existing invocation of this harness stays byte-identical.
+# ⛔ WHY SEEDS EXISTS. K is the RFD3 DIFFUSION BATCH (eval.num_designs), and K>1 forfeits determinism:
+# its rows share one initial-noise draw. The deterministic convention is K=1 with one seed per draw
+# (dev plan/100 §9), and generate.py already implements the seed list natively (_normalize_seeds,
+# :889-907, seed loop :1116-1165) with FOUR drivers passing it. This harness simply never exposed it.
+# ⇒ Setting SEEDS pins eval.num_designs=1 and hands the list through, so the draws are independent
+# rather than correlated batch rows, at ONE model load per cell because the loop lives inside
+# generate.py rather than out here.
+SEEDS="${SEEDS:-}"
+DETERMINISTIC="${DETERMINISTIC:-}"
 BAND="${BAND:-le256}"
 OF3_ENV="${OF3_ENV:-spa-verify-of3}"
 SCRMSD_ATOMS="${SCRMSD_ATOMS:-CA}"
@@ -122,6 +136,17 @@ log "  grid:     $NV variant(s) x $NP prompt(s) (band=$BAND) x lambda=[$LAM], K=
 log "  prep:     $PREP"
 log "  out:      $OUT"
 
+# Draw arguments, assembled once. Default path is exactly what it always was.
+DRAW_ARGS=(eval.num_designs="$K" eval.seed="$SEED")
+if [ -n "$SEEDS" ]; then
+  DRAW_ARGS=(eval.num_designs=1 "eval.seeds=[$SEEDS]")
+  log "  draws:    K=1 x seeds [$SEEDS]  (deterministic convention; NOT a K=$(echo "$SEEDS" | tr ',' '\n' | wc -l) batch)"
+else
+  log "  draws:    K=$K at seed $SEED  (diffusion BATCH; K>1 is not deterministic)"
+fi
+[ -n "$DETERMINISTIC" ] && DRAW_ARGS+=(eval.deterministic="$DETERMINISTIC") \
+  && log "  determinism: eval.deterministic=$DETERMINISTIC"
+
 TOTAL=$(( NV * NP )); done_n=0; ok=0
 for entry in $VARIANTS; do
   vname="${entry%%:*}"; ckpt_rel="${entry#*:}"
@@ -139,7 +164,7 @@ for entry in $VARIANTS; do
     "$PYTHON" "$REPO/scripts/eval/run_flywheel.py" \
       variant="$vname" hardware=local_a5000 \
       'eval.conditions=[baseline,spa]' "eval.lambda_scale=[$LAM]" \
-      eval.num_designs="$K" eval.proteinmpnn.num_seqs="$NSEQ" eval.seed="$SEED" \
+      "${DRAW_ARGS[@]}" eval.proteinmpnn.num_seqs="$NSEQ" \
       "${SAMPLER_ARGS[@]}" \
       "eval.score.scrmsd_atoms='$SCRMSD_ATOMS'" \
       eval.score.scrmsd_cutoff="$SCRMSD_CUTOFF" \
