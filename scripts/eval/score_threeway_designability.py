@@ -179,9 +179,13 @@ def main():
     # this driver is routinely handed 16 backbones all called `free_free_0.pdb` (one per seed), so
     # `out = {nm: [] for nm in names}` collapses them to ONE key and pours every design's refolds into
     # it. Joining on the stem then scores each design against ALL of them, i.e. against other seeds'
-    # designs. MEASURED on the 2026-09-16 A2 run before this fix: a baseline arm read 15/16 and 16/16
-    # designable where the correct per-design answer is 9/16 and 9/16, with single-design scRMSD errors
-    # up to 16.4 A. It inflates whichever arm has more near-duplicate siblings, so it is not a wash.
+    # designs. ⚠️ LATENT, NOT YET OBSERVED TO CHANGE AN ANSWER: on the 2026-09-16 A2 run (32 designs, 2
+    # distinct stems) the name-merged scoring and the correct by-index scoring agree cell for cell,
+    # because a design's own refolds already supplied its minimum. An earlier version of this comment
+    # claimed a measured inversion; that was an artifact of an offline re-score that mis-reproduced the
+    # driver's GNU-sort ordering, and it is withdrawn (dev results/59 §6). The defect is still real: the
+    # merge is silent, and a min over a superset can only move one way, so it can inflate a rate
+    # whenever some other design's refold happens to fit better than the design's own.
     # ⭐ The refold for (design i, sequence j) is at of3_batch/d{i}_q{j} by construction, so the index
     # is authoritative and needs no names at all.
     pairs = [(d, ss) for d, ss in zip(designs, seqsets) if ss is not None]

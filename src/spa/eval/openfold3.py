@@ -305,10 +305,11 @@ class OF3Refolder:
                 queries[f"d{i}_q{j}"] = self._chain(s)
         # ⛔ DUPLICATE NAMES SILENTLY MERGE, and that is a wrong ANSWER, not a warning. A dict keyed by
         # name collapses N backbones sharing a filename into one entry, and a caller joining on that
-        # name then scores every one of them against ALL their refolds pooled. Measured 2026-09-16 on a
-        # 32-design run with 2 distinct stems: a baseline arm read 15/16 designable where the correct
-        # answer was 9/16. Callers that cannot guarantee unique names must join on the `d{i}_q{j}` query
-        # ids, which are index-based and always correct.
+        # name then scores every one of them against ALL their refolds pooled. ⚠️ Seen in the wild on a
+        # 2026-09-16 32-design run whose files carried only 2 distinct stems; there it happened to
+        # change no verdict, since each design's own refolds already gave its minimum, but the merge is
+        # silent and a min over a superset can only move one way. Callers that cannot guarantee unique
+        # names must join on the `d{i}_q{j}` query ids, which are index-based and always correct.
         if len(set(names)) != len(names):
             dupes = sorted({nm for nm in names if names.count(nm) > 1})
             print(f"[of3] ⚠️ refold_all: {len(names)} backbones share {len(set(names))} distinct name(s); "
