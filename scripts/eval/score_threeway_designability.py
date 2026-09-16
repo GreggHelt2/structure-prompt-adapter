@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 from pathlib import Path
 
@@ -54,6 +55,13 @@ def main():
     ap.add_argument("--num-seqs", type=int, default=16,
                     help="ProteinMPNN sequences per backbone (best-of-K). N>=16 halves the best-of-N miss-rate "
                          "for hard backbones (dev 21 §4.1 best-of-N-noise finding)")
+    ap.add_argument("--max-seqs", type=int, default=None,
+                    help="Score best-of-k over only the FIRST k sequences (q0..q[k-1]) of each "
+                         "backbone, instead of all --num-seqs. SOUND BECAUSE ProteinMPNN runs at "
+                         "batch_size=1, so sequence i sits at stream position i (dev plan/100 section "
+                         "2.2) and the first k ARE an N=k run. NEEDED BECAUSE designability is "
+                         "best-of-N, so a rate at N=8 is systematically lower than the same designs at "
+                         "N=16; this reports both from one run without regenerating.")
     ap.add_argument("--proteinmpnn-seed", type=int, default=42,
                     help="ProteinMPNN sampling seed — FIXED nonzero for reproducibility (--seed 0 = RANDOM "
                          "each run in ProteinMPNN, which made best-of-N non-reproducible; dev 21 §4.1)")
@@ -173,6 +181,16 @@ def main():
     rows = []
     for d in designs:
         refolds = refolds_by_name.get(d.path.stem)
+        # ⛔ Truncate on the PARSED q index, never by slicing the list. refold_all appends
+        # d{i}_q{j} in j order but SKIPS a cif that failed to appear, so a hole makes position
+        # and sequence index diverge and refolds[:k] would quietly admit q8 while q3 is missing.
+        if args.max_seqs is not None and refolds:
+            _keep = []
+            for _p in refolds:
+                _m = re.search(r"_q(\d+)[/_]", str(_p))
+                if _m and int(_m.group(1)) < args.max_seqs:
+                    _keep.append(_p)
+            refolds = _keep
         s = score_design(d, prompt=None, refolds=refolds, motif=motif_score, cfg=cfg)
         rec = {"design": d.path.stem, "scrmsd": s.scrmsd, "designable": s.designable, "plddt": s.plddt,
                "motif_rmsd_design": s.motif_rmsd, "motif_rmsd_refold": s.motif_rmsd_refold,
