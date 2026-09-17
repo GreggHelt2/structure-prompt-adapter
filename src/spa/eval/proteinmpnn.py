@@ -300,6 +300,28 @@ def inverse_fold(cfg, *, designs=None) -> list[SequenceSet]:
         paths = [Path(str(getattr(d, "path", d))) for d in designs]
     else:
         paths = _resolve_design_paths(cfg, pm)
+
+    # ⛔ A MULTI-CHAIN design with `design_chains` unset means ProteinMPNN redesigns EVERY chain,
+    # including a target RFdiffusion3 held fixed. The refolder then predicts a complex whose target
+    # sequence ProteinMPNN invented, the residue count is unchanged so `self_consistency`'s equal-count
+    # guard passes, and scRMSD is computed against it. Silent, and it looks like a scientific result.
+    # The default stays "design every chain" because that is ProteinMPNN's own and is correct for a
+    # monomer, i.e. for every non-complex run in this project's record; this only refuses the case
+    # where the default is demonstrably wrong. Audit: dev `111` §15.1 A6; hazard: dev `90` §2.1.
+    if paths and not pm.get("design_chains"):
+        from .score import _as_struct
+        _p0 = paths[0]
+        try:
+            _chains = sorted({str(c) for c in _as_struct(str(_p0)).chain_id})
+        except Exception:
+            _chains = []
+        if len(_chains) > 1:
+            raise ValueError(
+                f"inverse_fold: {_p0.name} has {len(_chains)} chains {_chains} and "
+                f"eval.proteinmpnn.design_chains is unset, so ProteinMPNN would redesign ALL of them, "
+                f"including any chain held fixed by RFD3. Set e.g. "
+                f"+eval.proteinmpnn.design_chains=[{_chains[0]}] to design only the diffused chain."
+            )
     if not paths:
         raise ValueError(
             "inverse_fold: no design PDBs found — pass designs=, or set eval.proteinmpnn.designs / "

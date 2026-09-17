@@ -286,6 +286,27 @@ def _ca_array(struct):
 # --------------------------------------------------------------------------------------------------
 
 
+def phantom_ca_count(struct) -> int:
+    """How many ``CA``-named atoms belong to a NON-amino-acid residue (a calcium ion, typically).
+
+    ⭐ **Why this is a counter and not a filter.** ``_ca_array`` selects on ``atom_name == "CA"`` and a
+    calcium ion's atom name is literally ``CA``, so an ion is silently counted as a residue and shifts
+    every later positional index by one. The fix is NOT to filter inside ``_ca_array``: the block above
+    explains at length why that hot path stays branch-free, and every historical number went through it
+    unfiltered. So this DETECTS the condition and lets the caller raise, which costs one pass and
+    changes no arithmetic. Returns 0 for every archived structure (measured 2026-09-16: the only
+    HETATM atoms named ``CA`` in the whole archive are 3 selenomethionines, which are real residues and
+    are counted correctly). Audit: dev ``111`` §15.1 A5; the hazard is dev ``90`` §3.1 item L3.
+    """
+    from biotite.structure import filter_amino_acids
+
+    arr = _as_struct(struct)
+    is_ca = arr.atom_name == "CA"
+    if not bool(is_ca.any()):
+        return 0
+    return int((is_ca & ~filter_amino_acids(arr)).sum())
+
+
 def polymer_only(struct):
     """Drop non-amino-acid residues (ligands, ions, waters), keeping MODIFIED residues.
 
@@ -693,6 +714,19 @@ def score_design(design, *, prompt=None, refolds=None, plddt=None, motif=None, c
     refolds = list(refolds) if refolds is not None else None  # may be indexed twice (scRMSD + refold-side motif)
     name, condition, lam, n_res = _design_meta(design)
     ds = DesignScore(name=name, condition=condition, lambda_scale=lam, n_residues=n_res)
+
+    # ⛔ One check per design, before any metric reads the array: a non-amino-acid residue carrying an
+    # atom named `CA` (a calcium ion) would be counted as a residue by `_ca_array` and shift every
+    # later positional index by one, silently. Raising is the whole point; the caller fixes it by
+    # passing `polymer_only(design)`, which is the mechanism the block above `polymer_only` prescribes.
+    # 0 on every archived structure, so this changes no recorded number. Audit: dev `111` §15.1 A5.
+    _phantom = phantom_ca_count(design)
+    if _phantom:
+        raise ValueError(
+            f"score_design({name!r}): {_phantom} `CA`-named atom(s) belong to non-amino-acid residues "
+            f"(a calcium ion?). `_ca_array` would count them as residues and shift every later motif / "
+            f"region index by one. Pass `polymer_only(design)` (and the same for prompt/refolds)."
+        )
 
     if prompt is not None:
         adh = adherence(design, prompt, tm_norm=sc.tm_norm)

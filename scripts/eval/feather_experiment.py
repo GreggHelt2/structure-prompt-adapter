@@ -61,11 +61,26 @@ def _run_designability(pdbs, contig, motif_pdb, out_dir, args):
 
 
 def _core_window(u_lo, u_hi, L, width):
-    """The U interior EXCLUDING the feathered edge residues (only internal seams are feathered)."""
+    """The U interior EXCLUDING the feathered edge residues (only internal seams are feathered).
+
+    ⛔ **The clamp is per-SIDE, and that matters.** ``u_hi`` is inclusive, so |U| = ``u_hi - u_lo + 1``.
+    When BOTH seams are internal the width is subtracted from both ends, so clamping ``effw`` to |U|
+    (as this did until 2026-09-16) still lets ``2*effw`` exceed |U| and returns an INVERTED window:
+    at |U| = 90 a width of 45 gave ``[64, 63]`` (empty) and 60 gave ``[79, 48]`` (negative). The
+    caller then slices ``design_ca[clo:chi + 1]`` and ``tmtools`` raises *"Sequence is too short <3!"*,
+    **after** the designs and the whole refold pass for that width have already been paid for.
+    Clamping to ``(|U| - 1) // 2`` per side keeps at least one core residue. Audit: dev ``111``
+    §15.1 A1.
+    """
     left_int, right_int = _internal_u_edges(u_lo, u_hi, L)
-    effw = min(int(width), u_hi - u_lo + 1)
+    u_len = u_hi - u_lo + 1
+    n_sides = int(bool(left_int)) + int(bool(right_int))
+    cap = u_len if n_sides < 2 else max(0, (u_len - 1) // 2)
+    effw = min(int(width), cap)
     lo = u_lo + (effw if (left_int and width > 0) else 0)
     hi = u_hi - (effw if (right_int and width > 0) else 0)          # inclusive
+    if hi < lo:                                                     # unreachable given the clamp; loud if ever
+        raise ValueError(f"_core_window: inverted core [{lo},{hi}] for U=[{u_lo},{u_hi}] width={width}")
     return lo, hi, (left_int, right_int, effw)
 
 
@@ -112,7 +127,11 @@ def run_width(args, width):
     summary = {
         "cell": cellkey, "motif": mid, "seg": seg, "fold": fold, "layout": layout, "lambda": lam,
         "feather_width": int(width), "feather_shape": args.feather_shape,
-        "U": [u_lo, u_hi], "L": L, "core_window": [clo, chi],
+        # ⛔ INCLUSIVE bounds, unlike `result.json["U"]` which is HALF-OPEN (`_contiguous` returns
+        # `idxs[-1] + 1`). The two files carried the same key name under different conventions until
+        # 2026-09-16; the keys are now suffixed so they cannot be read as interchangeable. Every other
+        # span in this project is half-open. Audit: dev `111` §15.1 A2.
+        "U_inclusive": [u_lo, u_hi], "L": L, "core_window_inclusive": [clo, chi],
         "internal_edges": {"left": left_int, "right": right_int, "eff_width": effw},
         "profile_u_window": pv[u_lo:u_hi + 1],
         "adherence": {"full_U_tm": adh.get("tm_U_loc"), "core_U_tm": core_tm, "U_steer": adh.get("U_steer"),
@@ -160,6 +179,17 @@ def main():
         ap.error("--cell must be motif:seg:fold:layout:lambda (5 colon-separated fields)")
     args._cell = (parts[0], parts[1], parts[2], parts[3].upper(), float(parts[4]))
     widths = [int(x) for x in args.feather_widths.split(",") if x.strip() != ""]
+    # ⛔ VALIDATE WIDTHS BEFORE SPENDING ANY GPU. Both U seams are feathered when both are internal,
+    # so a width at or above half of |U| leaves a core too short to TM-score, and the failure would
+    # otherwise land in step (3) AFTER this width's designs and its whole refold pass are paid for,
+    # then abort the remaining widths. `_core_window` clamps so the window can never invert; this is
+    # the loud, early version of the same guard. Audit: dev `111` §15.1 A1.
+    _min_core = 3                                              # tmtools raises below 3 residues
+    _too_wide = [w for w in widths if w > 0 and (args.u_len - 2 * min(w, max(0, (args.u_len - 1) // 2))) < _min_core]
+    if _too_wide:
+        ap.error(f"--feather-widths {_too_wide} leave fewer than {_min_core} core residues in a "
+                 f"U of {args.u_len} (both seams are feathered, so each width is subtracted twice). "
+                 f"Use widths below {(args.u_len - _min_core) // 2 + 1}.")
     print(f"[feather] cell={args.cell}  widths={widths}  K={args.num_designs}  N={args.num_seqs}  "
           f"of3_bs={args.of3_batch_size}  shape={args.feather_shape}")
 

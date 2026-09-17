@@ -155,8 +155,12 @@ def describe_conditioning(cfg) -> dict[str, Any] | None:
     not happen. The specific thing being remembered here is dev ``90`` §5.0b.
 
     ⛔ **The disclosure.** RFdiffusion3 atomizes a ligand into the **same token track** SPA attends to,
-    one token per heavy atom, interleaved with the protein rather than appended
-    (``rfd3/transforms/pipelines.py:172-179``; dev ``90`` §3.1a). SPA's cross-attention query is the
+    one token per heavy atom (``rfd3/transforms/pipelines.py:172-179``; dev ``90`` §3.1a). For the
+    ``ligand:``-field spec form the ligand tokens are **appended last**, after the whole contig is
+    accumulated (``rfd3/inference/input_parsing.py:738``). ⚠️ **This docstring and the emitted string
+    below said "interleaved" until 2026-09-16, which was wrong**; nothing branched on it and no run was
+    affected, and the disclosure's conclusion is unchanged either way, since an appended ligand token is
+    still a token a uniform λ reaches. Audit: dev ``111`` §15.1 A4. SPA's cross-attention query is the
     full token tensor, so **with a uniform λ and no per-residue profile the adapter also steers the
     ligand's tokens**, using a fold prompt that knows nothing about small molecules. That is a
     deliberate, approved scope choice for the first runs (Gregg, 2026-09-03: route **(c)** of §5.0b,
@@ -187,7 +191,8 @@ def describe_conditioning(cfg) -> dict[str, Any] | None:
         "isolation": "NOT ISOLATED",
         "disclosure": (
             "RFdiffusion3 atomizes the ligand into the same token track SPA attends to (one token per "
-            "heavy atom, interleaved). With a uniform lambda this run therefore applied the fold "
+            "heavy atom, appended after the protein for the `ligand:` spec form). With a uniform "
+            "lambda this run therefore applied the fold "
             "prompt to the ligand's tokens as well as the protein's. This is route (c) of dev plan/90 "
             "section 5.0b, chosen deliberately on 2026-09-03. CONSEQUENCE: this run may NOT be "
             "described as isolating the ligand conditioning channel. The controlled arm needs the "

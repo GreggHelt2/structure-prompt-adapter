@@ -112,7 +112,14 @@ def _build_profile(L, b, kind, feather_w):
     if kind == "step":
         w[b:] = 0.0
         return w
-    lo, hi = max(0, b - feather_w), min(L, b + feather_w)
+    # ⛔ Clamp the HALF-WIDTH symmetrically before deriving the ramp, not the endpoints after.
+    # Clipping only one side (`max(0, ...)` / `min(L, ...)`) leaves `hi - lo != 2 * feather_w`, which
+    # moves the ramp's 0.5 crossing off `b` while the METRICS still split S/F at `b` (`tm_S` over
+    # [0,b), `tm_F` over [b,L)), biasing F-drag up and loc-index down for that arm alone, silently.
+    # Reachable only for `b < feather_w` or `b + feather_w > L`, which no documented invocation hits.
+    # Audit: dev `111` §15.1 A3.
+    feather_w = min(feather_w, b, L - b)
+    lo, hi = b - feather_w, b + feather_w
     for i in range(L):
         if i < lo:
             w[i] = 1.0
