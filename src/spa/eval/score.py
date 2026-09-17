@@ -277,12 +277,43 @@ def _ca_array(struct):
 # ``_ca_array`` is the single entry point for EVERY metric in this module (tm_score, ca_rmsd,
 # adherence, motif_rmsd, source_positions, pairwise_tm_diversity, self_consistency, the design-index
 # helpers) and for ``scripts/eval/domain_split.py``. Every historical number in ``docs/results/`` was
-# produced through it. Adding a filter there, even a default-off one, puts a branch in the hottest
-# correctness path in the project for the benefit of two experiments that have not run yet.
+# produced through it.
 #
-# Instead these RETURN A FILTERED AtomArray, and ``_as_struct`` passes an AtomArray straight through
-# (see above), so a caller writes ``adherence(polymer_only(design), prompt)`` and every existing
-# function is reached completely unmodified. Nothing on any historical path changes by construction.
+# ⚠️ THE ORIGINAL REASON GIVEN HERE WAS PERFORMANCE ("a branch in the hottest correctness path"), and
+# MEASUREMENT REFUTES IT (2026-09-16). Filtering costs 0.058 -> 0.866 ms per call on a 1,673-atom
+# structure: 15x, and irrelevant against a ~14,000 ms OpenFold3 refold or seconds-per-design
+# generation. Do not defend this decision on speed. The decision is still right, for two other
+# reasons, and they are recorded here so the next person does not overturn it on the strength of a
+# five-minute benchmark. Full numbers + pros and cons: dev ``111`` §15.2a.
+#
+# WHY NOT TO FOLD IT IN:
+#  1. ⛔ REPRODUCIBILITY COUPLING, the strongest reason. ``filter_amino_acids`` decides what an amino
+#     acid is from the PDB Chemical Component Dictionary (``_chem_comp.type``), and biotite ships a
+#     CCD SNAPSHOT THAT CHANGES BETWEEN VERSIONS. Folding it in makes a third-party, version-pinned
+#     data file load-bearing for every Ca count, hence every scRMSD, TM and positional index in the
+#     project. A biotite upgrade could then shift published numbers with nothing failing. Today the
+#     rule is ``atom_name == "CA"``: one line, and it cannot drift.
+#  2. ⛔ IT WOULD HIDE SOMETHING THE OPERATOR NEEDS. The only residue that collides is CALCIUM (atom
+#     name literally ``CA``; ZN/MG/MN/FE/FES/NAD/FAD/SAM/HEM do not). Silently dropping a Ca2+ fixes
+#     the backbone metrics while concealing that the input carried a metal, which is exactly what
+#     decides whether the refold query should carry the ion, whether the motif should pin it, and
+#     what ``ligand_pocket`` scores against.
+#  3. MEASURED BENEFIT TODAY IS ZERO. Over a random 600-file sample of the ~152k-file archive the
+#     filter changes the Ca count on 0 files and drops 0 residue names. MSE and SEP are KEPT by it,
+#     and HOH/SO4/FES carry no ``CA``-named atom, so it is a no-op on everything we hold.
+#
+# WHAT FOLDING IT IN WOULD BUY (the honest other side): a future calcium-bearing input would score
+# correctly with no caller change, and no caller would have to remember ``polymer_only``. ⚠️ But no
+# calcium appears anywhere in the record or the queue: the Tier-0 cutinase is explicitly metal-free,
+# Tier-2 uses an organic substrate, and the small-molecule targets are FAD/SAM. The one metal-prone
+# route (protein-DNA) is ranked 3rd of 4 and unstarted.
+#
+# ⇒ THE CHOSEN SHAPE: ``phantom_ca_count`` DETECTS the collision and ``score_design`` RAISES on it,
+# so the protection is loud instead of silent and only the stop/go decision touches the CCD, never
+# the arithmetic. These helpers RETURN A FILTERED AtomArray, and ``_as_struct`` passes an AtomArray
+# straight through (see above), so a caller writes ``adherence(polymer_only(design), prompt)`` and
+# every existing function is reached completely unmodified. Nothing on any historical path changes
+# by construction.
 # --------------------------------------------------------------------------------------------------
 
 
