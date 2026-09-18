@@ -117,6 +117,7 @@ it shell out to this env for both downstream steps:
       'eval.lambda_scale=[0.5,1.0]' eval.num_designs=8 eval.length=100 \\
       eval.proteinmpnn.conda_env=$ENV_NAME \\
       +eval.flywheel.refolder._target_=spa.eval.openfold3.OF3Refolder \\
+      +eval.flywheel.refolder.deterministic=true \\
       +eval.flywheel.refolder.ckpt_path=\${paths.openfold3_ckpt} \\
       +eval.flywheel.refolder.runner_yaml=\${paths.openfold3_runner_yaml} \\
       +eval.flywheel.refolder.out_dir=\${eval.out_dir}

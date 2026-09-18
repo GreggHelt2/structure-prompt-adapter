@@ -54,6 +54,7 @@ if [ "$STAGE" = "designability" ]; then
   OF3_ENV="${OF3_ENV:-spa-verify-of3}"
   OF3_OVR=(
     +eval.flywheel.refolder._target_=spa.eval.openfold3.OF3Refolder
+    +eval.flywheel.refolder.deterministic=true
     +eval.flywheel.refolder.ckpt_path="$OF3_CKPT"
     +eval.flywheel.refolder.runner_yaml="$OF3_YAML"
     +eval.flywheel.refolder.conda_env="$OF3_ENV"

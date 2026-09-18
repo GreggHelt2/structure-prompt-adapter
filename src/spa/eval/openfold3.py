@@ -76,7 +76,7 @@ class OF3Refolder:
         cuda_visible_devices: str | None = None,
         use_msa_server: bool = False,
         batch_patch_shim: str | None = None,
-        deterministic: bool = False,
+        deterministic: bool | None = None,
         ligand_ccd: str | None = None,
         ligand_smiles: str | None = None,
         chain_msa_paths: dict | None = None,
@@ -94,23 +94,51 @@ class OF3Refolder:
         # script — the shim monkeypatches OF3's 3 bs=1 guards so a runner-yaml with
         # data_module_args.batch_size>1 works for same-length batches (dev 23; scripts/eval/of3_batch_patch.py).
         self.batch_patch_shim = str(batch_patch_shim) if batch_patch_shim else None
-        # ⭐ OPT-IN bitwise-reproducible refolds (dev plan/91 §5). False => today's behaviour,
-        # byte-identical: no shim, nothing patched. True => run OF3 through
+        # ⭐ DEFAULT-ON bitwise-reproducible refolds (dev plan/91 §5). True => run OF3 through
         # scripts/eval/of3_determinism_patch.py, which routes the ONE order-unstable op
         # (Tensor.scatter_add_ in atom-to-token pooling) through torch's own deterministic kernel.
         # Costs ~+1.3% against the ~1.6x the torch-flag route would cost on this, the pipeline's
         # dominant stage. ⛔ Enabling CHANGES the structures: it does not reproduce prior refolds.
         # ⚠️ Not known to be sufficient for LIGANDS (a second RNG source exists; plan/91 §5.3).
-        self.deterministic = bool(deterministic)
-        if self.deterministic and self.batch_patch_shim:
-            # bs>1 is not bit-identical to bs=1 for non-first rows regardless of this shim, because
-            # predict_step reseeds once per batch (runner.py:923-926). Asking for both is incoherent,
-            # so refuse rather than silently returning irreproducible "deterministic" refolds.
-            raise ValueError(
-                "OF3Refolder(deterministic=True) is incompatible with batch_patch_shim (batch_size>1). "
-                "Batched refolds are not bit-reproducible per sample by construction (dev plan/23 §7.5). "
-                "Use bs=1 for reproducible refolds, or drop deterministic= for throughput."
-            )
+        #
+        # ⛔ WHY THE DEFAULT FLIPPED, 2026-09-18. As an opt-in this was silently missed for the whole
+        # determinism programme. `run_variant_desig_local.sh` passed five refolder kwargs and not this
+        # one, so queue row 25 generated deterministically and then refolded on STOCK OpenFold3, and
+        # results/63 §2 labelled it "contract v2". Nothing failed, nothing logged, and the RFD3 patch's
+        # own banner ("atom-to-token pooling is now order-stable") read like a pipeline-wide statement.
+        # ⇒ An omitted opt-in is indistinguishable from a deliberate opt-out. Default-on removes that.
+        #
+        # ⭐ None is the SENTINEL for "nobody decided", and it is not the same as False:
+        #   None  -> deterministic, unless batching makes that impossible (resolved below, loudly)
+        #   True  -> deterministic; incompatible with batch_patch_shim, so that combination RAISES
+        #   False -> an explicit, deliberate opt-out; honoured in silence because it was chosen
+        if deterministic is None:
+            if self.batch_patch_shim:
+                # bs>1 is not bit-identical to bs=1 for non-first rows regardless of any shim, because
+                # predict_step reseeds once per batch (runner.py:923-926). Batching and determinism are
+                # mutually exclusive by construction, so a caller that asked for batching and expressed
+                # no view on determinism gets throughput. ⛔ But it is ANNOUNCED: silence is the exact
+                # failure this default was flipped to prevent.
+                self.deterministic = False
+                print(
+                    "[OF3Refolder] ⚠️  NON-DETERMINISTIC refolds: batch_patch_shim (batch_size>1) is set, "
+                    "which cannot be bit-reproducible per sample (dev plan/23 §7.5), so the default-on "
+                    "determinism was stood down. Pass deterministic=False to silence this, or drop "
+                    "batch_patch_shim for reproducible refolds.",
+                    flush=True,
+                )
+            else:
+                self.deterministic = True
+        else:
+            self.deterministic = bool(deterministic)
+            if self.deterministic and self.batch_patch_shim:
+                # Asking for both EXPLICITLY is incoherent, so refuse rather than silently returning
+                # irreproducible "deterministic" refolds.
+                raise ValueError(
+                    "OF3Refolder(deterministic=True) is incompatible with batch_patch_shim (batch_size>1). "
+                    "Batched refolds are not bit-reproducible per sample by construction (dev plan/23 §7.5). "
+                    "Use bs=1 for reproducible refolds, or drop deterministic= for throughput."
+                )
         # Ligand for the refold query (dev ``90`` §3.1 L2). Both None => no ligand chain is emitted and
         # every query is byte-identical to before this existed. `ligand_smiles` wins if both are given.
         self.ligand_ccd = str(ligand_ccd) if ligand_ccd else None

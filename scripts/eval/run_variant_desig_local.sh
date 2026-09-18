@@ -79,6 +79,12 @@ SEED="${SEED:-0}"
 # initial noise, which is what makes the paired baseline-vs-SPA comparison valid.
 SEEDS="${SEEDS:-}"
 DETERMINISTIC="${DETERMINISTIC:-}"
+# ⛔ OF3 REFOLD DETERMINISM, DEFAULT ON since 2026-09-18. This variable exists because its ABSENCE
+# caused queue row 25 to generate deterministically and then refold on STOCK OpenFold3, which
+# results/63 §2 then labelled "contract v2". DETERMINISTIC above is the RFdiffusion3 flag ALONE and
+# never reached the refolder. Set REFOLD_DETERMINISTIC=false only for a deliberate non-deterministic
+# refold, and say so in the run's plan/106 row.
+REFOLD_DETERMINISTIC="${REFOLD_DETERMINISTIC:-true}"
 BAND="${BAND:-le256}"
 OF3_ENV="${OF3_ENV:-spa-verify-of3}"
 SCRMSD_ATOMS="${SCRMSD_ATOMS:-CA}"
@@ -187,6 +193,7 @@ for entry in $VARIANTS; do
       +eval.flywheel.refolder.ckpt_path="$PROJECT_ROOT/models/openfold3/of3-p2-155k.pt" \
       +eval.flywheel.refolder.runner_yaml="$REPO/configs/of3/of3_nokernel.yml" \
       +eval.flywheel.refolder.conda_env="$OF3_ENV" \
+      +eval.flywheel.refolder.deterministic="$REFOLD_DETERMINISTIC" \
       +eval.flywheel.refolder.out_dir="$po" \
       eval.out_dir="$po" </dev/null \
       && { ok=$((ok+1)); log "  [$done_n/$TOTAL] $vname / $id OK"; } \

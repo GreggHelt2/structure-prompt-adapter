@@ -215,6 +215,13 @@ def _force_determinism():
     return applied
 
 
+# determinism-exempt: this probe is the determinism DIAGNOSTIC, not a consumer of it. It deliberately
+# runs a stock control arm so the shimmed arm has something to be compared against, and its
+# `use_deterministic_algorithms(True, warn_only=True)` path above is the very configuration plan/91
+# §2.4 records as warning and then silently running the nondeterministic kernel anyway. Forcing this
+# default on would delete the control and make the probe incapable of detecting anything, which is
+# exactly the failure mode (a PASS that is also what a zero-sensitivity test returns) that plan/106
+# row 1 had to add a positive control to escape.
 def run(prompt_pdb, ckpt, length, timesteps, seed, K, device, out_json, control,
         deterministic=False, lam=1.0):
     import torch

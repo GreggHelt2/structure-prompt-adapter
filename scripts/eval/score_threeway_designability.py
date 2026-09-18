@@ -76,9 +76,13 @@ def main():
                     help="OF3 refold batch_size. >1 forces the of3_nokernel.yml base + the of3_batch_patch.py "
                          "shim (the triton kernels CANNOT batch — evoformer.py:915); ~2.5x at bs=8, folds "
                          "equivalent (dev 23 §7.8). bs=1 = original per-fold behavior, unchanged.")
-    ap.add_argument("--deterministic", action="store_true",
-                    help="opt-in bitwise determinism: OF3 refold via torch's deterministic scatter_add "
-                         "(dev plan/91). Requires bs=1 (the default); OF3Refolder refuses it with --of3-batch-size>1.")
+    ap.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True,
+                    help="bitwise determinism, DEFAULT ON since 2026-09-18: OF3 refold via torch's "
+                         "deterministic scatter_add (dev plan/91). Requires bs=1 (the default); OF3Refolder "
+                         "refuses it with --of3-batch-size>1. Pass --no-deterministic for a deliberate "
+                         "non-deterministic refold, and say so in the run's plan/106 row. ⛔ This was "
+                         "store_true (default OFF) until row 25 refolded on stock OF3 while being "
+                         "labelled contract v2; an omitted opt-in reads exactly like a chosen opt-out.")
     ap.add_argument("--use-msa-server", action="store_true",
                     help="fetch a ColabFold MSA per sequence (api.colabfold.com) instead of MSA-free "
                          "(the project default). GPU-free NETWORK step; the fold itself is ~1.01x. NOT part "

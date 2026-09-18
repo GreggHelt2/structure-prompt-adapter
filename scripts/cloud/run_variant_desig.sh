@@ -76,6 +76,7 @@ for entry in $VARIANTS; do
       paths.rfd3_ckpt=/workspace/weights/rfd3_latest.ckpt \
       paths.proteinmpnn_repo="$MPNN_REPO" \
       +eval.flywheel.refolder._target_=spa.eval.openfold3.OF3Refolder \
+      +eval.flywheel.refolder.deterministic=true \
       +eval.flywheel.refolder.ckpt_path=/workspace/weights/of3-p2-155k.pt \
       +eval.flywheel.refolder.runner_yaml="$SPA_REPO/configs/of3/of3_triton.yml" \
       +eval.flywheel.refolder.out_dir="$po" \

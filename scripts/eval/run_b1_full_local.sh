@@ -157,6 +157,7 @@ while IFS=$'\t' read -r id contig; do
     "+eval.motif.contig='$contig'" \
     +eval.flywheel.prompt_struct="$PREP/$id.pdb" \
     +eval.flywheel.refolder._target_=spa.eval.openfold3.OF3Refolder \
+    +eval.flywheel.refolder.deterministic=true \
     +eval.flywheel.refolder.ckpt_path="$PROJECT_ROOT/models/openfold3/of3-p2-155k.pt" \
     +eval.flywheel.refolder.runner_yaml="$REPO/configs/of3/of3_nokernel.yml" \
     +eval.flywheel.refolder.conda_env="$OF3_ENV" \

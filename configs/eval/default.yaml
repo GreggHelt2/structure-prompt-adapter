@@ -60,7 +60,14 @@ seed: 0                    # re-seeded before EVERY sampler run -> reproducible 
 # invocation and something has to discriminate it. Single-seed runs keep today's exact names.
 seeds: null                # e.g. [0,1,2,3,4,5,6,7] for 8 designs at K=1
 
-# ⭐ OPT-IN bitwise determinism (dev plan/91). false -> today's behaviour, byte-identical: nothing is
+# ⭐ DEFAULT-ON bitwise determinism (dev plan/91). ⛔ FLIPPED false -> true on 2026-09-18 (Gregg):
+# every queued run is deterministic at ALL THREE stages unless its plan/106 row says otherwise.
+# WHY THE FLIP: as an opt-in this was silently missed. results/63 called a run "contract v2" when only
+# generation was deterministic, because this key is the RFD3 flag ALONE and nothing said so at the
+# point of use. An opt-in that is forgotten looks identical to a run that never wanted it.
+# ⚠️ The other two stages are elsewhere and must be kept in step: `proteinmpnn.seed` (already a safe
+# non-zero 42) and OF3's `OF3Refolder(deterministic=)` (also default-on since 2026-09-18).
+# false -> pre-2026-09-18 behaviour, byte-identical: nothing is
 # patched at import, so an unset/false run cannot differ from stock. true -> replaces RFD3's ONE
 # order-unstable op (foundry scatter_mean's Tensor.index_reduce, CUDA atomics) with an order-stable
 # one-hot matmul, making generation bit-identical across independent processes. Cost-neutral
@@ -70,7 +77,7 @@ seeds: null                # e.g. [0,1,2,3,4,5,6,7] for 8 designs at K=1
 # (0.056 to 2.469 A from stock at the same seed); it is a go-forward guarantee only.
 # ⛔ The guarantee is a TUPLE: same seed AND same num_designs (K) AND same GPU model AND same torch
 # build. Design i at K=4 differs from K=8 by up to 2.433 A, from shape-dependent GEMM kernel choice.
-deterministic: false
+deterministic: true
 ladder: null               # checkpoint-step ADHERENCE LADDER (scripts/eval/ladder_sweep.py, dev 13): list of
                            #   snapshot paths to sweep (adherence vs training step). null -> not a ladder run.
 
