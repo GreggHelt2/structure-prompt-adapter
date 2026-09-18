@@ -13,7 +13,23 @@ the λ-profile used). width 0 == the boxcar baseline.
 
     conda run -n spa-dev python scripts/eval/feather_experiment.py \
         --cell A0A7C9GW19:A30-50:A0A7S3EB45:CAB:3 --feather-widths 0,9,19,38 \
-        --num-seqs 16 --proteinmpnn-seed 42 --of3-batch-size 8 --out-dir outputs/eval/feather
+        --num-seqs 16 --proteinmpnn-seed 42 --out-dir outputs/eval/feather
+
+⛔ **THREE THINGS CHANGED 2026-09-18 AND THE SCRIPT WOULD NOT RUN WITHOUT THEM.** Recorded here because
+each was invisible at the call site:
+
+1. **`--of3-batch-size` now defaults to 1, not 8.** OF3 determinism is incompatible with bs>1 (batched
+   refolds are not bit-reproducible per sample), and since the determinism defaults were flipped on
+   2026-09-18 the scorer raises when handed both. The old default made this script abort on launch.
+2. **The generation args now carry `deterministic`.** `run_grid` builds its cfg with
+   `bool(getattr(args, "deterministic", False))` (`probe_hard_soft_free.py:390`), so an ABSENT
+   attribute writes an explicit `False` that OVERRIDES the config default. This script passed an
+   in-process `SimpleNamespace` with no such field, so it would have generated NON-deterministically
+   while every config read said otherwise. That is exactly how queue row 25 came to be labelled
+   "contract v2" while refolding on stock OpenFold3.
+3. **K is pinned at 1 and the draws come from `--seeds`.** The 2026-07-06 run used K=8 at one seed,
+   which is 8 rows of ONE diffusion batch; batch SHAPE selects cuBLAS kernels, so K=8 designs are not
+   comparable with K=1 ones (dev plan/100).
 """
 from __future__ import annotations
 
@@ -46,6 +62,9 @@ def _run_designability(pdbs, contig, motif_pdb, out_dir, args):
     cmd = [sys.executable, str(SCORER), "--pdbs", *[str(p) for p in pdbs], "--contig", contig,
            "--motif-source", str(motif_pdb), "--num-seqs", str(args.num_seqs),
            "--proteinmpnn-seed", str(args.proteinmpnn_seed), "--of3-batch-size", str(args.of3_batch_size),
+           # ⛔ PASSED EXPLICITLY, both ways. The scorer's flag is BooleanOptionalAction, so silence
+           # would take ITS default rather than this script's, and the two could drift apart unnoticed.
+           ("--deterministic" if args.deterministic else "--no-deterministic"),
            "--out-dir", str(out_dir)]
     for flag, val in (("--proteinmpnn-repo", args.proteinmpnn_repo), ("--of3-ckpt", args.of3_ckpt),
                       ("--of3-runner-yaml", args.of3_runner_yaml), ("--of3-conda-env", args.of3_conda_env)):
@@ -91,21 +110,47 @@ def run_width(args, width):
     wdir.mkdir(parents=True, exist_ok=True)
     print(f"\n[feather] ===== cell {cellkey}  width={width}  shape={args.feather_shape} =====", flush=True)
 
-    # (1) regenerate the K designs with this feathered profile (single layout, single λ)
-    gargs = SimpleNamespace(
-        ckpt=args.ckpt, rfd3_ckpt=args.rfd3_ckpt, motif_source=mid, motif_seg=seg, target=fold,
-        u_len=args.u_len, c_len=args.c_len, layout=layout, layouts=layout, lambda_scale=lam,
-        lambdas=f"{lam:g}", num_designs=args.num_designs, seed=args.seed, num_timesteps=args.num_timesteps,
-        pdb_dir=args.pdb_dir, device=args.device, out_dir=str(wdir),
-        feather_width=int(width), feather_shape=args.feather_shape)
-    grid, _ = run_grid(gargs)
-    lo = grid[0]                                                    # single layout
-    u_lo, u_hi_excl = lo["U"]; u_hi = u_hi_excl - 1; L = lo["L"]   # lo["U"] hi is EXCLUSIVE (_contiguous) -> inclusive last U residue
-    adh = lo["lambdas"][f"{lam:g}"]                                 # tm_U_loc / U_steer / tm_C_loc / C_drag / net_steer / delta_motif_rmsd
+    # (1) regenerate this width's designs, ONE PER SEED at K=1 (see the module docstring, item 3).
+    per_seed, geom = [], None
+    for seed in args.seeds:
+        gargs = SimpleNamespace(
+            ckpt=args.ckpt, rfd3_ckpt=args.rfd3_ckpt, motif_source=mid, motif_seg=seg, target=fold,
+            u_len=args.u_len, c_len=args.c_len, layout=layout, layouts=layout, lambda_scale=lam,
+            lambdas=f"{lam:g}", num_designs=int(args.num_designs), seed=int(seed),
+            num_timesteps=args.num_timesteps, pdb_dir=args.pdb_dir, device=args.device,
+            out_dir=str(wdir / f"s{seed}"),
+            # ⛔ THE FIELD WHOSE ABSENCE MADE THIS SILENTLY NON-DETERMINISTIC. See docstring item 2.
+            deterministic=bool(args.deterministic),
+            feather_width=int(width), feather_shape=args.feather_shape)
+        grid, _ = run_grid(gargs)
+        lo = grid[0]                                                # single layout
+        # lo["U"] hi is EXCLUSIVE (_contiguous) -> inclusive last U residue
+        g = (lo["U"][0], lo["U"][1] - 1, lo["L"])
+        if geom is None:
+            geom = g
+        elif g != geom:
+            raise ValueError(f"geometry moved between seeds: {g} against {geom}. Every seed of one "
+                             "width must share U and L or the pooled core window is meaningless.")
+        per_seed.append({"seed": int(seed), **lo["lambdas"][f"{lam:g}"]})
+    u_lo, u_hi, L = geom
 
-    pdbs = sorted(wdir.glob(f"*/localized_l{lam:g}_*.pdb"))
+    def _mean(key):
+        vals = [d[key] for d in per_seed if d.get(key) is not None]
+        return (sum(vals) / len(vals)) if vals else None
+    # tm_U_loc / U_steer / tm_C_loc / C_drag / net_steer / delta_motif_rmsd, averaged over the seeds.
+    adh = {k: _mean(k) for k in ("tm_U_loc", "U_steer", "tm_C_loc", "C_drag", "net_steer",
+                                 "delta_motif_rmsd")}
+
+    # ⛔ RECURSIVE, deliberately. Each seed now gets its own run_grid out_dir, so the designs sit one
+    # level DEEPER than before (wdir/s<seed>/<cell>/). The previous non-recursive glob would match
+    # nothing here and the width would be skipped with a warning rather than failing.
+    pdbs = sorted(wdir.rglob(f"localized_l{lam:g}_*.pdb"))
+    expected = len(args.seeds) * int(args.num_designs)
     if not pdbs:
-        print(f"[feather]   ⚠️ no localized PDBs under {wdir} — skipping width {width}"); return None
+        print(f"[feather]   ⚠️ no localized PDBs under {wdir}; skipping width {width}"); return None
+    if len(pdbs) != expected:
+        raise ValueError(f"width {width}: {len(pdbs)} designs on disk, expected {expected}. "
+                         "An incomplete width must not be scored as if it were whole.")
 
     # (2) designability + motif survival (reuse the scorer; nokernel bs=of3_batch_size)
     contig = build_contig(seg, args.u_len, args.c_len, layout)[0]
@@ -120,6 +165,15 @@ def run_width(args, width):
 
     profile = _profile(L, list(range(u_lo, u_hi + 1)), "cpu", feather_width=int(width), shape=args.feather_shape)
     pv = [round(float(x), 3) for x in profile.tolist()]
+    # ⭐ A FEATHER THAT DID NOTHING IS THE ONE FAILURE THIS EXPERIMENT CANNOT ABSORB: it would report
+    # "feathering changes nothing" for a width that was never applied, which reads as a null and is a
+    # NO-OP. Provenance proves what was requested, never what took effect (root CLAUDE.md, amended
+    # 2026-09-15), so compare the actual profile against the boxcar.
+    if int(width) > 0:
+        boxcar = _profile(L, list(range(u_lo, u_hi + 1)), "cpu", feather_width=0, shape=args.feather_shape)
+        if [round(float(x), 3) for x in boxcar.tolist()] == pv:
+            raise ValueError(f"width {width} produced a profile IDENTICAL to the boxcar: the feather is "
+                             "a no-op, and a no-op is not a null.")
     n_des = sum(1 for r in (rows or []) if r.get("designable"))
     best = min((r["scrmsd"] for r in (rows or []) if r.get("scrmsd") is not None), default=None)
     motif_ref = [r["motif_rmsd_refold"] for r in (rows or []) if r.get("motif_rmsd_refold") is not None]
@@ -127,6 +181,15 @@ def run_width(args, width):
     summary = {
         "cell": cellkey, "motif": mid, "seg": seg, "fold": fold, "layout": layout, "lambda": lam,
         "feather_width": int(width), "feather_shape": args.feather_shape,
+        # ⛔ THE SAMPLE'S SHAPE IS PART OF THE RESULT. K and the seed list together define draws/width,
+        # and K is part of the reproducibility identity, so a summary that records only a rate cannot
+        # be compared against another run later (dev plan/100 §9).
+        "seeds": list(args.seeds), "K": int(args.num_designs),
+        "draws": len(args.seeds) * int(args.num_designs),
+        "deterministic": bool(args.deterministic),
+        # ⭐ Per-seed adherence is KEPT, not just its mean: the mean over 8 seeds hides the spread, and
+        # a spread is exactly what decides whether a width difference is real (dev results/65 §3).
+        "per_seed_adherence": per_seed,
         # ⛔ INCLUSIVE bounds, unlike `result.json["U"]` which is HALF-OPEN (`_contiguous` returns
         # `idxs[-1] + 1`). The two files carried the same key name under different conventions until
         # 2026-09-16; the keys are now suffixed so they cannot be read as interchangeable. Every other
@@ -156,11 +219,21 @@ def main():
     ap.add_argument("--feather-shape", default="cosine", choices=["cosine", "triangular", "gaussian"])
     ap.add_argument("--num-seqs", type=int, default=16, help="ProteinMPNN seqs per design (best-of-N)")
     ap.add_argument("--proteinmpnn-seed", type=int, default=42)
-    ap.add_argument("--of3-batch-size", type=int, default=8, help="OF3 refold batch_size (nokernel; ~2.5x@8; dev 23 §7.8)")
-    ap.add_argument("--num-designs", type=int, default=8, help="K designs per width (paired noise)")
+    ap.add_argument("--of3-batch-size", type=int, default=1,
+                    help="OF3 refold batch_size. ⛔ DEFAULT CHANGED 8 -> 1 on 2026-09-18: bs>1 is "
+                         "incompatible with OF3 determinism and the scorer now RAISES when given both. "
+                         "Set >1 only together with --no-deterministic, for a throughput run.")
+    ap.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True,
+                    help="bitwise determinism at BOTH stages, default ON since 2026-09-18. Passed into "
+                         "run_grid (whose absence-means-False getattr would otherwise override the "
+                         "config default) and forwarded to the scorer.")
+    ap.add_argument("--seeds", default="0,1,2,3,4,5,6,7",
+                    help="comma list of generation seeds. K=1 per seed, so this IS the draw count.")
+    ap.add_argument("--num-designs", type=int, default=1,
+                    help="K, the diffusion batch. ⛔ PINNED AT 1 (dev plan/100): K>1 is one batch whose "
+                         "SHAPE selects cuBLAS kernels, so its designs are not comparable with K=1 ones.")
     ap.add_argument("--u-len", type=int, default=90)
     ap.add_argument("--c-len", type=int, default=120)
-    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-timesteps", type=int, default=None)
     ap.add_argument("--ckpt", default=DEFAULT_CKPT)
     ap.add_argument("--rfd3-ckpt", default=None)
@@ -172,6 +245,10 @@ def main():
     ap.add_argument("--of3-ckpt", default=None)
     ap.add_argument("--of3-runner-yaml", default=None)
     ap.add_argument("--of3-conda-env", default="spa-verify-of3")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="resolve and VALIDATE everything, print the plan, then exit before any GPU "
+                         "work. ⛔ Creates no directories: it returns from main() before run_width, "
+                         "which is where the only mkdir lives.")
     args = ap.parse_args()
 
     parts = args.cell.split(":")
@@ -190,8 +267,38 @@ def main():
         ap.error(f"--feather-widths {_too_wide} leave fewer than {_min_core} core residues in a "
                  f"U of {args.u_len} (both seams are feathered, so each width is subtracted twice). "
                  f"Use widths below {(args.u_len - _min_core) // 2 + 1}.")
-    print(f"[feather] cell={args.cell}  widths={widths}  K={args.num_designs}  N={args.num_seqs}  "
-          f"of3_bs={args.of3_batch_size}  shape={args.feather_shape}")
+    # ⛔ argparse hands --seeds over as a STRING. `for seed in args.seeds` would then walk CHARACTERS,
+    # so "0,1,2" becomes seeds '0', ',', '1'. Parse it before anything touches the GPU.
+    args.seeds = [int(x) for x in str(args.seeds).split(",") if x.strip() != ""]
+    if not args.seeds:
+        ap.error("--seeds parsed to an empty list; at least one seed is required")
+    if len(set(args.seeds)) != len(args.seeds):
+        ap.error(f"--seeds contains duplicates: {args.seeds}. At K=1 the draw count is the number of "
+                 "DISTINCT seeds, so a repeat silently shrinks the real sample while the count does not.")
+    if int(args.num_designs) != 1:
+        print(f"[feather] ⚠️ K={args.num_designs}, not 1. K>1 is ONE diffusion batch whose SHAPE selects "
+              "cuBLAS kernels, so these designs are not comparable with K=1 runs (dev plan/100).", flush=True)
+    if int(args.of3_batch_size) > 1 and args.deterministic:
+        ap.error(f"--of3-batch-size {args.of3_batch_size} with determinism ON: batched refolds are not "
+                 "bit-reproducible per sample, and the scorer refuses the combination. Use bs=1, or pass "
+                 "--no-deterministic for a deliberate throughput run and say so in the plan/106 row.")
+    print(f"[feather] cell={args.cell}  widths={widths}  K={args.num_designs}  seeds={args.seeds}  "
+          f"draws/width={len(args.seeds) * int(args.num_designs)}  N={args.num_seqs}  "
+          f"of3_bs={args.of3_batch_size}  deterministic={args.deterministic}  shape={args.feather_shape}")
+
+    # ⭐ The dry run exists because every guard above FAILS loudly, so testing them proves only that the
+    # error paths work. The happy path, in particular that --seeds parsed to a LIST of ints rather than
+    # being iterated as a string, is otherwise unverifiable without spending GPU.
+    if args.dry_run:
+        draws = len(args.seeds) * int(args.num_designs)
+        for w in widths:
+            print(f"[feather] DRY width {w}: {len(args.seeds)} seed(s) x K={args.num_designs} = {draws} "
+                  f"design(s), then ONE scorer call at N={args.num_seqs} "
+                  f"({draws * int(args.num_seqs)} refolds)")
+        tot = len(widths) * draws
+        print(f"[feather] DRY total: {tot} designs, {tot * int(args.num_seqs)} refolds across "
+              f"{len(widths)} width(s). Nothing generated, nothing scored, no directories created.")
+        return
 
     summaries = [s for s in (run_width(args, w) for w in widths) if s]
     out = Path(args.out_dir).expanduser().resolve()
