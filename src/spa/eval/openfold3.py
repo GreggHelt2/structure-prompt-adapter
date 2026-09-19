@@ -259,6 +259,21 @@ class OF3Refolder:
         cmd = self._build_command(query_json, run_dir)
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
         self._last_proc = proc  # kept so callers can surface OF3 output on a silent (exit-0) empty result
+        # ⭐ PERSIST THE SUBPROCESS OUTPUT ON **SUCCESS** TOO. `capture_output=True` means OF3's stdout
+        # and stderr were surfaced only on a non-zero exit, so on a successful run everything it said
+        # was discarded, including `of3_determinism_patch.py`'s own `contract v{N}` banner and its
+        # ⛔ `WARNING: no datapoint identity ... falling back to a constant per-item seed`, which
+        # signals that contract v2's position-independence QUIETLY DEGRADED. Measured 2026-09-18: a
+        # 2,176-refold deterministic run left no on-disk trace that the shim had run at all, and the
+        # only behavioural evidence was the live process command line, which vanishes at exit.
+        # ⚠️ Best-effort by design: a logging failure must never break a refold, so this cannot raise.
+        try:
+            log = run_dir / "of3_subprocess.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(f"cmd: {' '.join(cmd)}\nexit: {proc.returncode}\n"
+                           f"--- stdout ---\n{proc.stdout or ''}\n--- stderr ---\n{proc.stderr or ''}\n")
+        except Exception:
+            pass
         if proc.returncode != 0:
             raise RuntimeError(
                 f"OpenFold3 refold failed (exit {proc.returncode}) for {run_dir.name}.\n"
