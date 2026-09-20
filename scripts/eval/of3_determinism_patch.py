@@ -75,8 +75,15 @@ import sys
 # ⭐ Bump whenever a change here alters what ``deterministic=True`` PRODUCES. Runs made under
 # different contracts are different draws and must never be pooled per-structure.
 #   1  scatter_add_ only (2026-09-08). Position-dependent: see dev plan/97.
-#   2  adds per-item RNG reseeding, which removes that dependence (2026-09-09).
-CONTRACT = 2
+#   2  adds per-item RNG reseeding keyed on the datapoint's identity, which removes the POSITION
+#      dependence but makes the output a function of the QUERY ID (2026-09-09).
+#   3  ⭐ reseeds from a CONSTANT instead (2026-09-20). The seed no longer depends on the query id, so
+#      the refold depends on the SEQUENCE ALONE and two runs are comparable however they were batched,
+#      partitioned or named. THIS is what makes deterministic runs comparable to each other, and v2
+#      did not deliver it: dev plan/106 row 27 measured 11 of 16 designs with byte-identical inputs
+#      differing between runs, one by 7.32 A, purely because our own `refold_all` derives query ids
+#      from a loop index (`d{i}_q{j}`) and the lane partition changed the index.
+CONTRACT = 3
 
 
 def _patch_position_independence() -> None:
@@ -112,22 +119,31 @@ def _patch_position_independence() -> None:
     from openfold3.core.data.framework.single_datasets.inference import InferenceDataset
 
     _orig_getitem = InferenceDataset.__getitem__
-    warned: list = []
 
     def _seeded_getitem(self, index):
-        try:
-            dp = self.datapoint_cache.iloc[index]
-            key = f"{dp['query_id']}:{int(dp['seed'])}"
-        except Exception as exc:
-            # Falling back to a CONSTANT keeps position-independence, which is the property that
-            # matters, and only sacrifices per-item variation. Announced once, because silently
-            # reverting to position-dependence is the exact failure this patch exists to remove.
-            if not warned:
-                warned.append(1)
-                print(f"[of3_determinism_patch] WARNING: no datapoint identity for index {index} "
-                      f"({type(exc).__name__}); falling back to a constant per-item seed. Output stays "
-                      "position-independent but loses per-item variation.", file=sys.stderr, flush=True)
-            key = "__fallback__"
+        # ⭐ A CONSTANT, deliberately, and this is contract v3's whole content.
+        #
+        # ⛔ WHY NOT THE DATAPOINT'S IDENTITY, which is what v2 used. A seed must be a function of the
+        # EXPERIMENT's identity and of nothing else. v2 keyed on `dp['query_id']`, which looks intrinsic
+        # and is not: `OF3Refolder.refold_all` names queries `d{i}_q{j}` from a LOOP INDEX, so the same
+        # design carries a different id in a 22-per-lane run than in an 11-per-lane one, hence a
+        # different seed, hence a different structure. A batch layout is not part of any experiment's
+        # identity. Measured 2026-09-20 (dev plan/106 row 27): 11 of 16 designs whose with-MSA and
+        # MSA-free inputs are BYTE-IDENTICAL still differed between two runs, one by 7.32 A.
+        #
+        # ⭐ WHAT THE CONSTANT BUYS: the refold depends on the SEQUENCE ALONE, so runs are comparable
+        # however they were batched, partitioned, ordered or named. That is the point of the whole
+        # determinism programme, and it is the FIRST thing a comparison needs. It also makes the noise
+        # PAIRED across conditions, the same property RFdiffusion3's fixed seed gives us.
+        #
+        # ⚠️ WHAT IT COSTS: per-item RNG variation, which v2's docstring cited as the reason to prefer
+        # identity-derived seeds. That cost was never measured and is close to nil on this project's
+        # path: this RNG feeds FEATURIZATION (MSA subsampling and similar) and we refold MSA-free or
+        # with a depth-1 query-only alignment, where there is nothing to subsample.
+        #
+        # ⇒ No try/except and no fallback warning: there is nothing left to look up, so the branch that
+        # could silently degrade (dev plan/84 §5c) no longer exists.
+        key = "__spa_constant_v3__"
         seed = int.from_bytes(hashlib.blake2b(key.encode(), digest_size=8).digest(), "big") % (2**31)
         torch.default_generator.manual_seed(seed)   # CPU generator only: seeding CUDA here would
         random.seed(seed)                           # initialise it inside a forked worker and kill it
@@ -166,8 +182,10 @@ def apply_patches() -> None:
 
     print(
         f"[of3_determinism_patch] contract v{CONTRACT}: scatter_add_ routed through torch's "
-        "deterministic kernel, and __getitem__ reseeds per item from the datapoint's identity. "
-        "Refolds will NOT match default-build runs, nor contract v1 runs, at the same seed.",
+        "deterministic kernel, and __getitem__ reseeds from a CONSTANT, so a refold depends on the "
+        "SEQUENCE ALONE: not its position, not the worker count, not the batch size, not the query id. "
+        "That is what makes two runs comparable however they were batched or partitioned. "
+        "Refolds will NOT match default-build runs, nor contract v1 or v2 runs, at the same seed.",
         file=sys.stderr,
         flush=True,
     )
