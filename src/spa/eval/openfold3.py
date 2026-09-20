@@ -162,7 +162,7 @@ class OF3Refolder:
     #: Chain ids handed to OF3, in ProteinMPNN's own chain order.
     _CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-    def _chain(self, seq) -> dict:
+    def _chain(self, seq, msa_paths=None) -> dict:
         """One query body: **one OF3 chain per ProteinMPNN chain**, plus any configured ligand.
 
         ⛔ **This used to do ``str(seq).replace("/", "")``, which was silently WRONG for a complex.**
@@ -177,14 +177,29 @@ class OF3Refolder:
         oracle sees the same small molecule RFdiffusion3 designed around (dev ``90`` §3.1 item L2).
         Without it the ligand is absent from the refold and self-consistency silently scores an
         apo prediction against a holo design.
+
+        ⭐ **PER-SEQUENCE alignments via ``msa_paths``** (added 2026-09-19 for dev ``106`` row 27).
+        :attr:`chain_msa_paths` is ONE mapping shared by every query in a batch, which is right for the
+        complex case (chain 1 is always the same fixed target) and **wrong when each sequence has its own
+        alignment**: row 27 refolds 4,352 distinct designed sequences, each with its own ``.a3m``, and the
+        instance attribute would hand every one of them the same file. ``msa_paths`` is the per-call
+        override, merged OVER :attr:`chain_msa_paths` so a complex's fixed-target alignment still applies
+        to its own chain. Accepts either a list/tuple of paths, meaning **chain 0** (the monomer case), or
+        a ``{chain_index: [paths]}`` dict. ⛔ Passing nothing leaves the emitted query **byte-identical**
+        to before this existed, which is what keeps every archived caller comparable.
         """
         parts = [p.strip() for p in str(seq).split("/") if p.strip()]
         if len(parts) > len(self._CHAIN_IDS):
             raise ValueError(f"refold: {len(parts)} chains exceeds the {len(self._CHAIN_IDS)} ids available")
         chains = [{"molecule_type": "protein", "chain_ids": [self._CHAIN_IDS[i]], "sequence": p}
                   for i, p in enumerate(parts)]
-        for i, ch in enumerate(chains):                        # per-chain precomputed alignment, if any
-            paths = (self.chain_msa_paths or {}).get(i)
+        # Per-chain precomputed alignments: the instance mapping, with any per-call override merged OVER
+        # it. A bare list/tuple means chain 0, which is the monomer case and the only one row 27 needs.
+        per_chain = dict(self.chain_msa_paths or {})
+        if msa_paths:
+            per_chain.update(msa_paths if isinstance(msa_paths, dict) else {0: msa_paths})
+        for i, ch in enumerate(chains):
+            paths = per_chain.get(i)
             if paths:
                 ch["main_msa_file_paths"] = [str(x) for x in paths]
         if self.ligand_ccd or self.ligand_smiles:
@@ -344,8 +359,17 @@ class OF3Refolder:
             names.append(getattr(ss, "name", f"design{i}"))
             seqs = list(getattr(ss, "sequences", []) or [])
             nseq.append(len(seqs))
+            # Optional per-SEQUENCE alignments, parallel to `sequences` (dev 106 row 27). See _chain:
+            # absent or short => no alignment for that sequence, and the query is byte-identical to
+            # before this existed. ⛔ A length mismatch is a JOIN BUG, not a shortfall to tolerate:
+            # silently pairing sequence j with alignment j-1 would refold real sequences against the
+            # wrong homologs and report plausible numbers, so it raises rather than truncating.
+            msas = list(getattr(ss, "msa_paths", []) or [])
+            if msas and len(msas) != len(seqs):
+                raise ValueError(f"refold_all: {names[-1]} has {len(seqs)} sequences but "
+                                 f"{len(msas)} msa_paths entries; they must correspond 1:1")
             for j, s in enumerate(seqs):
-                queries[f"d{i}_q{j}"] = self._chain(s)
+                queries[f"d{i}_q{j}"] = self._chain(s, msas[j] if msas else None)
         # ⛔ DUPLICATE NAMES SILENTLY MERGE, and that is a wrong ANSWER, not a warning. A dict keyed by
         # name collapses N backbones sharing a filename into one entry, and a caller joining on that
         # name then scores every one of them against ALL their refolds pooled. ⚠️ Seen in the wild on a
