@@ -1,0 +1,35 @@
+# ROW 37: the 8 RECOGNIZABLE folds, re-measured deterministically (dev plan/106 row 37).
+#
+# WHY THIS EXISTS RATHER THAN REUSING manifest_b4.yaml. b4 pinned SIX of these folds and ran them on
+# 2026-07-02 on the stock cloud pipeline at K=8/N=8. This row re-measures at K=1/N=4 under determinism
+# contract v3, and ADDS 1CEX and 1EMA, which b4 prepped or listed but never ran.
+#
+# ⛔ QUALITATIVE BY CONSTRUCTION, and that is SETTLED, not a gate. dev results/31 ran a Foldseek
+# held-out check on 2026-07-31 under a rule pre-registered BEFORE the check (max-TM < 0.40 clean,
+# >= 0.50 same-fold present) and ALL TEN queries landed at 0.68 to 0.97 against the CDDB train split.
+# The cause is corpus density, not split leakage: test and validate return the same numbers, so no
+# split of CDDB could have made these folds novel, and ESM3 saw the PDB anyway. These prompts can
+# never carry a generalization claim. They carry a ROBUSTNESS check and figure material.
+#
+# ⭐ WHY 1CEX AND 1EMA ARE IN. (a) 1CEX has more paper mentions than any other fold here. (b) 1EMA and
+# 1QY3 are BOTH GFP beta-barrel, two independent structures of one fold, which is a free internal
+# control; 1CEX and 7YII are likewise both a-b alpha/beta-hydrolase.
+#
+# ⚠️ LENGTHS ARE THE ESM3 PROMPT ROW COUNT, which is what eval.length must match, NOT a residue count.
+# 1EMA disagrees three ways and this is the resolution: dev prompt_catalog section 3 says "238 as prompt;
+# 225 residues resolved in chain A"; stage_prompt_pdb.py reports 226 residues / 225 CA; and the encoded
+# prompt is (221, 1536). ESM3 drops what it cannot tokenize, almost certainly GFP's cyclized chromophore,
+# so 221 is the operative number. 1QY3, also GFP, shows no such gap (227 CA -> (227, 1536)).
+# ⇒ every len below was READ BACK from the encoded .pt in outputs/_prep/recognizable8/, not asserted.
+claim_status: qualitative            # FINAL. See results/31; do not re-open.
+pdb_source: RCSB                     # https://files.rcsb.org/download/<ID>.pdb
+
+folds:
+  - {id: 1QY3, chain: A, fold: all-b, len: 227, name: GFP_beta_barrel,     note: "b4 set; ESM3's GFP template"}
+  - {id: 7RPN, chain: A, fold: a-b,   len: 252, name: TIM_barrel,          note: "b4 set; iconic (a/b)8"}
+  - {id: 8SIU, chain: A, fold: all-b, len: 365, name: beta_propeller,      note: "b4 set; longest here"}
+  - {id: 7SBD, chain: H, fold: all-b, len: 209, name: immunoglobulin,      note: "b4 set; chain H"}
+  - {id: 7YII, chain: A, fold: a-b,   len: 273, name: ab_hydrolase,        note: "b4 set"}
+  - {id: 6E6R, chain: A, fold: a-b,   len: 56,  name: ferredoxin,          note: "b4 set; smallest"}
+  - {id: 1CEX, chain: A, fold: a-b,   len: 197, name: cutinase,            note: "ADDED for row 37; most paper mentions of any fold here"}
+  - {id: 1EMA, chain: A, fold: all-b, len: 221, name: GFP_beta_barrel_1EMA, note: "ADDED for row 37; same fold as 1QY3 = internal control. len 221 is the ESM3 prompt rows; catalog says 238/225 and staging says 225"}
