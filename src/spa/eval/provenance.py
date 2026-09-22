@@ -270,6 +270,45 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
             rec["proteinmpnn"] = {k: _plain(ev.proteinmpnn.get(k, None))
                                   for k in ("seed", "num_seqs", "sampling_temp")} \
                 if ev.get("proteinmpnn", None) is not None else None
+            # The REFOLD stage's oracle identity. Recorded because its ABSENCE is indistinguishable
+            # from its being off: queue row 25 generated deterministically and refolded on STOCK
+            # OpenFold3 for 15 h 57 m while being labelled contract v2, and nothing logged, because
+            # an unset opt-in is byte-identical to a chosen opt-out (root CLAUDE.md, 2026-09-18).
+            # Measured again on row 37 (dev results/73 §0): this record carried RFD3's determinism
+            # and NOTHING for OpenFold3, so contract v3 and MSA-free both had to be recovered from a
+            # subprocess log. `of3_contract()` was written for exactly this and was called by nobody.
+            # ⛔ `deterministic_requested` IS THE CONFIG, NOT THE OUTCOME, and the two can differ:
+            # OF3Refolder resolves None -> deterministic but STANDS DOWN for bs>1 at runtime
+            # (openfold3.py:115-131), and the shim is a SUBPROCESS, so no in-process state can report
+            # what it did. => named `_requested` to match the RFD3 block above, which pairs its own
+            # `requested` with a `_det_state()` the refolder has no equivalent of. To prove EFFECT,
+            # read the shim's `CONTRACT` banner from `<out_dir>/of3_batch/of3_subprocess.log`.
+            # ⚠️ `contract` is what the shim WOULD apply, so it is null when determinism is declined,
+            # never 0: unknown and off are different answers (dev plan/101 §6).
+            try:
+                _fw = ev.get("flywheel", None)
+                _rf = _fw.get("refolder", None) if _fw is not None else None
+            except Exception:
+                _rf = None
+            if _rf is not None:
+                try:
+                    from .openfold3 import OF3Refolder
+                    _req = _plain(_rf.get("deterministic", None))
+                    rec["openfold3"] = {
+                        "refolder": _plain(_rf.get("_target_", None)),
+                        "deterministic_requested": _req,
+                        # None means "take the refolder's default", which IS deterministic.
+                        "deterministic_default_applies": _req is None,
+                        "contract": None if _req is False else OF3Refolder.of3_contract(),
+                        "runner_yaml": _plain(_rf.get("runner_yaml", None)),
+                        "use_msa_server": _plain(_rf.get("use_msa_server", None)),
+                        "num_diffusion_samples": _plain(_rf.get("num_diffusion_samples", None)),
+                        "ckpt": _file_id(_rf.get("ckpt_path", None))
+                        if _rf.get("ckpt_path", None) else None,
+                    }
+                except Exception as exc:
+                    rec["anomalies"].append(
+                        f"openfold3 capture failed: {type(exc).__name__}: {exc}")
             rec["checkpoint"] = _file_id(ev.get("ckpt", None)) if ev.get("ckpt", None) else None
             try:
                 rec["rfd3_ckpt"] = _file_id(cfg.paths.rfd3_ckpt)
