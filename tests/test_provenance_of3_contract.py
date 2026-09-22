@@ -37,7 +37,13 @@ def test_a_deterministic_refold_records_its_contract():
 
 
 def test_declining_determinism_records_no_contract_rather_than_zero():
-    """⚠️ null, never 0: unknown and off are different answers (dev plan/101 §6)."""
+    """⚠️ null, never 0: unknown and off are different answers (dev plan/101 §6).
+
+    determinism-exempt: this is the TEST of the declined-determinism branch, so the whole point is
+    to pass deterministic=False and assert the record says so. No refold runs here; `collect()`
+    only reads a config dict. The checker's rule (dev plan/106 §4a) is about RUNS, and a test that
+    never wires a refolder cannot produce one.
+    """
     of3 = collect(_cfg(deterministic=False))["openfold3"]
     assert of3["deterministic_requested"] is False
     assert of3["contract"] is None
