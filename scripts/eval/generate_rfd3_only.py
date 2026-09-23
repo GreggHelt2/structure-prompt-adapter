@@ -28,6 +28,18 @@ from omegaconf import DictConfig
 def main(cfg: DictConfig) -> None:
     from spa.eval.generate import _resolve_out_dir, _run_once, build_eval_engine
 
+    # ⭐ Honour `eval.deterministic` here too, added 2026-09-23 for dev `plan/115` §4.1 test D
+    # (their determinism against OURS). Without this the script could produce only a STOCK arm, and the
+    # only deterministic path available was `generate.py conditions=[baseline]`, which this script's own
+    # docstring explains is "wrapper attached, silent" rather than SPA-free. ⇒ test D would have compared
+    # their bare RFD3 against our SPA-attached RFD3 and could not have attributed a difference.
+    # Same call site and same single decision point as `generate.py:314-315`; `maybe_enable` guards its
+    # own config read and no-ops when the key is absent or falsy, so this changes nothing for callers
+    # that never set it.
+    from spa.eval.determinism import maybe_enable as _maybe_deterministic
+
+    _maybe_deterministic(cfg)
+
     engine = build_eval_engine(cfg)          # pure RFD3; SPA is never imported, let alone attached
     out_dir = _resolve_out_dir(cfg.eval.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
