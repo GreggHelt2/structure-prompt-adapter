@@ -6,10 +6,12 @@ WHY THIS SCRIPT EXISTS, NOT JUST `conditions=[baseline]` IN `generate.py`. `gene
 *output* (`clear_prompt`), it does not skip attaching the wrapper. So `conditions=[baseline]`
 measures "wrapper attached, silent," not "wrapper never inserted into the model at all," and the
 two are not necessarily the same cost. This script calls `build_eval_engine()` +
-`spa.eval.generate._run_once()` directly and imports nothing else from `spa.model` in the whole
-process, so there is no code path by which SPA could be attached.
+`engine.run()` directly and imports nothing else from `spa.model` in the whole process, so there is
+no code path by which SPA could be attached. (It called `spa.eval.generate._run_once()` until
+2026-09-23; that helper passes `out_dir=None`, which suppresses serialization, so the designs were
+never written. See the note in `main`.)
 
-`build_eval_engine()` / `_run_once()` are pure RFD3 (`attach_spa` is imported lazily, inside
+`build_eval_engine()` and `engine.run()` are pure RFD3 (`attach_spa` is imported lazily, inside
 `load_adapter()`, which this script never calls -- verified by reading `spa/model/loader.py` and
 `spa/eval/generate.py` directly, not assumed).
 
@@ -26,7 +28,7 @@ from omegaconf import DictConfig
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="eval")
 def main(cfg: DictConfig) -> None:
-    from spa.eval.generate import _resolve_out_dir, _run_once, build_eval_engine
+    from spa.eval.generate import _resolve_out_dir, build_eval_engine
 
     # ⭐ Honour `eval.deterministic` here too, added 2026-09-23 for dev `plan/115` §4.1 test D
     # (their determinism against OURS). Without this the script could produce only a STOCK arm, and the
@@ -43,9 +45,31 @@ def main(cfg: DictConfig) -> None:
     engine = build_eval_engine(cfg)          # pure RFD3; SPA is never imported, let alone attached
     out_dir = _resolve_out_dir(cfg.eval.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    outputs = _run_once(engine, spec=None)   # unconditional, K = eval.num_designs
+
+    # ⛔ DO NOT ROUTE THIS THROUGH ``_run_once``. It calls ``engine.run(..., out_dir=None)``, and
+    # ``out_dir=None`` is precisely what suppresses serialization, so the designs exist only in memory
+    # and the script printed a COUNT while writing nothing. That was invisible for as long as this
+    # script served its original purpose, dev ``73``'s M10 inference-overhead TIMING, where only the
+    # clock mattered. It surfaced when dev ``115`` §4.1 test D needed the structures themselves:
+    # five successive cloud runs completed cleanly, with the determinism shim confirmed active, and
+    # produced nothing to compare.
+    # ⇒ Call the engine directly with a real ``out_dir`` so it serializes its ``.cif.gz``. The
+    # ``next(iter(...))`` mirrors ``_run_once``'s own contract: one ``example_id`` holding K outputs.
+    outputs_by_example = engine.run(inputs=None, out_dir=out_dir)   # unconditional, K = eval.num_designs
+    if not outputs_by_example:
+        raise RuntimeError("engine.run produced no outputs (empty design specification).")
+    outputs = next(iter(outputs_by_example.values()))
+
+    written = sorted(out_dir.rglob("*.cif*"))
     print(f"rfd3-only: generated {len(outputs)} design(s) under {out_dir} "
           f"(SPA never attached this process)")
+    print(f"rfd3-only: wrote {len(written)} structure file(s)")
+    # ⛔ Fail loudly rather than leaving a caller to discover an empty directory, which is how the
+    # original silence cost five runs.
+    if not written:
+        raise RuntimeError(
+            f"engine.run wrote no structure files under {out_dir}; the designs would be lost."
+        )
 
 
 if __name__ == "__main__":
