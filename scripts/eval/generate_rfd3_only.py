@@ -55,15 +55,17 @@ def main(cfg: DictConfig) -> None:
     # produced nothing to compare.
     # ⇒ Call the engine directly with a real ``out_dir`` so it serializes its ``.cif.gz``. The
     # ``next(iter(...))`` mirrors ``_run_once``'s own contract: one ``example_id`` holding K outputs.
-    outputs_by_example = engine.run(inputs=None, out_dir=out_dir)   # unconditional, K = eval.num_designs
-    if not outputs_by_example:
-        raise RuntimeError("engine.run produced no outputs (empty design specification).")
-    outputs = next(iter(outputs_by_example.values()))
+    # ⛔ THE TWO MODES ARE MUTUALLY EXCLUSIVE, and getting this backwards cost a run.
+    # ``engine.run(out_dir=None)`` returns the RFD3Output objects and writes NOTHING (which is why
+    # ``_run_once`` passes None). ``engine.run(out_dir=<path>)`` WRITES the .cif.gz and returns an EMPTY
+    # mapping. ⇒ With out_dir set, an empty return is SUCCESS, not failure. A first version of this block
+    # raised on it, so a run that had correctly written all four designs reported
+    # "engine.run produced no outputs" and exited 1. ⇒ validate by the FILES, never by the return value.
+    engine.run(inputs=None, out_dir=out_dir)   # unconditional, K = eval.num_designs; writes, returns {}
 
     written = sorted(out_dir.rglob("*.cif*"))
-    print(f"rfd3-only: generated {len(outputs)} design(s) under {out_dir} "
+    print(f"rfd3-only: wrote {len(written)} structure file(s) under {out_dir} "
           f"(SPA never attached this process)")
-    print(f"rfd3-only: wrote {len(written)} structure file(s)")
     # ⛔ Fail loudly rather than leaving a caller to discover an empty directory, which is how the
     # original silence cost five runs.
     if not written:
