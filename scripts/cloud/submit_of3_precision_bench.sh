@@ -28,7 +28,13 @@ TAG="${TAG:-0.1.0}"
 IMAGE="${IMAGE:-us-central1-docker.pkg.dev/spa-dev-499900/spa/spa-combined:${TAG}}"
 SA="${SA:-spa-worker@spa-dev-499900.iam.gserviceaccount.com}"
 REPO_URL="${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}"
-REPO_REF="${REPO_REF:-main}"
+# ⛔ NO `REPO_REF="${REPO_REF:-main}"` DEFAULT HERE, AND THAT IS THE POINT.
+# `_pin_run_env.sh`'s `_pin_repo_ref` pins REPO_REF to the SUBMITTING MACHINE'S HEAD SHA, but only if
+# the caller has not already set it (`if [ -n "${REPO_REF:-}" ]; then ... return`). A `:-main` default
+# here therefore SKIPS the pin and hands the job a moving branch, which is exactly what the runner's
+# own header promises does not happen. Caught by a dry run printing
+# "[pin] REPO_REF explicitly set: main" instead of a sha. ⇒ leave it unset and let the pin work;
+# `REPO_REF=main bash submit_...` still overrides deliberately if a branch is ever wanted.
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 OF3_CKPT_URI="${OF3_CKPT_URI:-$BUCKET/weights/of3-p2-155k.pt}"
 LENGTHS="${LENGTHS:-76,250}"

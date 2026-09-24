@@ -94,8 +94,20 @@ python -c "import spa; print('spa import OK', spa.__file__)" || { log "FATAL: sp
 for need in scripts/eval/bench_of3_length.py configs/of3/of3_triton.yml; do
   [ -r "$SPA_REPO/$need" ] || { log "FATAL: pinned tree has no $need"; exit 14; }
 done
-conda run -n spa-verify-of3 python -c "from spa.eval.score import ca_rmsd; print('ca_rmsd OK')" \
-  || { log "FATAL: score.py::ca_rmsd missing from the pinned tree"; exit 14; }
+# ⛔ THIS GATE RUNS IN THE DEFAULT ENV, NOT spa-verify-of3, AND THAT IS THE WHOLE ARCHITECTURE.
+# openfold3.py:13-16 states it: OpenFold3 "is not importable here, it has its own heavy deps. We
+# invoke it via subprocess ... run in spa-verify-of3 via conda run". So `spa` lives in the DEFAULT env
+# and OF3Refolder(conda_env="spa-verify-of3") spawns the OF3 env ITSELF, per call.
+# ⚠️ A first version wrapped this gate and the whole bench in `conda run -n spa-verify-of3`, where
+# `spa` is not installed. The job died in 30 s (~$0.09) reporting "ca_rmsd missing from the pinned
+# tree" while the tree was perfectly fine and the ENV was wrong. ⭐ The gate did its job, it caught my
+# bug before any GPU work, but its MESSAGE sent the diagnosis in the wrong direction, which is the
+# same defect as conflating a crash with a missing opt-in: distinct failures must not share a message.
+python -c "from spa.eval.score import ca_rmsd; print('ca_rmsd OK (default env, where spa lives)')" \
+  || { log "FATAL: cannot import spa.eval.score.ca_rmsd in the DEFAULT env."; \
+       log "  Distinguish before acting: is 'spa' importable at all (the pip install -e above)?"; \
+       log "  Is biotite present? Is ca_rmsd actually in the pinned tree? These are 3 different faults."; \
+       exit 14; }
 conda run -n spa-verify-of3 python -c "import triton; print('OF3 env: triton', triton.__version__)"
 
 mkdir -p /workspace/weights "$OUT"
@@ -129,8 +141,11 @@ run_arm() {                                   # run_arm <label> <yaml>
   local label=$1 yml=$2 d="$OUT/$label"
   mkdir -p "$d"
   log "=== ARM $label  ($(basename "$yml")) ==="
-  conda run -n spa-verify-of3 python "$SPA_REPO/scripts/eval/bench_of3_length.py" \
+  # ⛔ DEFAULT ENV, not spa-verify-of3: the driver needs `spa`, and it passes --of3-conda-env down so
+  # OF3Refolder spawns the OF3 env per refold (bench_of3_length.py:86,107). See the gate above.
+  python "$SPA_REPO/scripts/eval/bench_of3_length.py" \
       --lengths "$LENGTHS" --of3-ckpt "$CKPT" --of3-runner-yaml "$yml" \
+      --of3-conda-env spa-verify-of3 \
       --out-dir "$d" --json "$d/bench.json" > "$d/stdout.log" 2>&1
   local rc=$?
   log "ARM $label rc=$rc"
@@ -145,7 +160,8 @@ run_arm bf16_b "$OUT/bf16.yml"
 
 # ---------------------------------------------------------------- compare
 log "=== COMPARISON ==="
-conda run -n spa-verify-of3 python - "$OUT" "$LENGTHS" <<'PY' 2>&1 | tee "$OUT/VERDICT.txt"
+# ⛔ DEFAULT ENV again: this imports spa.eval.score and biotite, neither of which is in spa-verify-of3.
+python - "$OUT" "$LENGTHS" <<'PY' 2>&1 | tee "$OUT/VERDICT.txt"
 import json, pathlib, subprocess, sys, hashlib
 
 out, lengths = pathlib.Path(sys.argv[1]), [int(x) for x in sys.argv[2].split(",")]
