@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import threading
 import time
 from pathlib import Path
 
@@ -43,37 +42,14 @@ def _seq(n: int) -> str:
     return (_MOTIF * (n // len(_MOTIF) + 1))[:n]
 
 
-class _GpuPoller(threading.Thread):
-    """Sample used VRAM while a subprocess runs. The refold happens in another conda env, so torch's
-    own max_memory_allocated cannot see it; nvidia-smi can."""
-
-    # The A5000 by stable UUID, per root CLAUDE.md: numeric indices are unreliable on this box because
-    # nvidia-smi orders by PCI bus (5060=0) while CUDA defaults to FASTEST_FIRST (A5000=0). Polling all
-    # GPUs and taking the max would report the DISPLAY card's usage instead of the compute card's.
-    A5000_UUID = "GPU-46586b6c-b6ad-480a-4e6d-ff908b4bc3cb"
-
-    def __init__(self, interval=0.5, gpu=None):
-        super().__init__(daemon=True)
-        self.gpu = gpu or self.A5000_UUID
-        # NB: do NOT name this `_stop` — threading.Thread has an internal _stop() method and a
-        # bool would shadow it, giving "'bool' object is not callable" from the thread machinery.
-        self.interval, self.peak_mib, self._halt = interval, 0, False
-
-    def run(self):
-        while not self._halt:
-            try:
-                out = subprocess.run(
-                    ["nvidia-smi", "-i", self.gpu, "--query-gpu=memory.used",
-                     "--format=csv,noheader,nounits"],
-                    capture_output=True, text=True, timeout=10).stdout.split()
-                self.peak_mib = max([self.peak_mib] + [int(v) for v in out if v.isdigit()])
-            except Exception:                                    # noqa: BLE001
-                pass
-            time.sleep(self.interval)
-
-    def stop(self):
-        self._halt = True
-        self.join(timeout=5)
+# ⛔ THE POLLER MOVED TO spa.eval.gpu_poll AND ITS OLD VERSION WAS BROKEN ON THE CLOUD.
+# It hardcoded the local A5000's UUID, so on a cloud H100 `nvidia-smi -i <uuid>` failed, a bare
+# `except: pass` swallowed it, and every row reported 0 MiB while looking perfectly fine. Measured
+# 2026-09-23 on Vertex job 5803754397590618112: eight rows, all zero, no warning (dev results/71
+# §10.5). The shared version resolves the device from CUDA_VISIBLE_DEVICES or from there being only
+# one GPU, refuses to guess on a multi-GPU box, and reports None rather than 0 when it measures
+# nothing. ⭐ A hardcoded device UUID is a portability bug root CLAUDE.md already forbids.
+from spa.eval.gpu_poll import GpuPoller as _GpuPoller, fmt_mib   # noqa: E402
 
 
 def main():
@@ -125,13 +101,13 @@ def main():
                      "peak_vram_mib": poller.peak_mib, "oom_suspected": oom,
                      "error": err[:400]})
         flag = "OK " if ok else ("OOM" if oom else "FAIL")
-        print(f"[bench] L={n:>4}  {flag}  {dt:>6.1f} s  peak {poller.peak_mib:>6} MiB"
+        print(f"[bench] L={n:>4}  {flag}  {dt:>6.1f} s  peak {fmt_mib(poller.peak_mib):>6} MiB"
               + ("" if ok else f"\n           {err[:200]}"))
 
     print(f"\n{'len':>5} {'result':>7} {'sec':>7} {'peakMiB':>9}")
     for r in rows:
         print(f"{r['length']:>5} {('OK' if r['ok'] else ('OOM' if r['oom_suspected'] else 'FAIL')):>7} "
-              f"{r['seconds']:>7.1f} {r['peak_vram_mib']:>9}")
+              f"{r['seconds']:>7.1f} {fmt_mib(r['peak_vram_mib']):>9}")
     good = [r["length"] for r in rows if r["ok"]]
     bad = [r["length"] for r in rows if not r["ok"]]
     print(f"\n[bench] ⭐ largest length that FOLDED locally: {max(good) if good else 'none'}")

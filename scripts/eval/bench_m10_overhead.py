@@ -69,31 +69,12 @@ _REPO = _HERE.parents[2]          # structure-prompt-adapter
 # GPU-agnostic VRAM poller (bench_of3_length.py's pattern, generalized: no hardcoded A5000 UUID, so
 # this runs unmodified on a single-GPU H100 cloud instance or the local dual-GPU A5000 box).
 # --------------------------------------------------------------------------------------------------
-class _GpuPoller(threading.Thread):
-    """Sample used VRAM (nvidia-smi) while a subprocess runs. A child process's torch allocator is
-    invisible to this process's own torch.cuda.max_memory_allocated(), so external polling is the
-    only way to see it for the subprocess-based arms."""
-
-    def __init__(self, interval=0.5, gpu=None):
-        super().__init__(daemon=True)
-        self.gpu = gpu                                            # None -> poll the default/only GPU
-        self.interval, self.peak_mib, self._halt = interval, 0, False
-
-    def run(self):
-        cmd = ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"]
-        if self.gpu:
-            cmd = ["nvidia-smi", "-i", self.gpu] + cmd[1:]
-        while not self._halt:
-            try:
-                out = subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.split()
-                self.peak_mib = max([self.peak_mib] + [int(v) for v in out if v.isdigit()])
-            except Exception:                                     # noqa: BLE001
-                pass
-            time.sleep(self.interval)
-
-    def stop(self):
-        self._halt = True
-        self.join(timeout=5)
+# ⛔ THE POLLER MOVED TO spa.eval.gpu_poll. Its old version here passed no `-i` and took the max
+# over ALL GPUs, which on the local dual-GPU box can report the DISPLAY card (the RTX 5060) rather
+# than the compute card. The other copy of this class, in bench_of3_length.py, had the opposite
+# bug: it hardcoded the A5000 UUID and silently returned 0 on the cloud. ⭐ Two copies, each broken
+# on the platform the other handled, which is what duplication buys.
+from spa.eval.gpu_poll import GpuPoller as _GpuPoller, fmt_mib   # noqa: E402
 
 
 # --------------------------------------------------------------------------------------------------
@@ -184,7 +165,7 @@ def phase_arms(a) -> list[dict]:
                 num_designs=a.k, length=length, **sampler_kw), gpu=a.gpu, script="generate_rfd3_only.py")
             rows.append({"arm": "host_only", "sampler": sampler_name, "length": length, **r})
             print(f"[m10:arms] host_only s={sampler_name} L={length}  {r['seconds']:>7.1f}s  "
-                  f"peak {r['peak_vram_mib']:>6} MiB  ok={r['ok']}")
+                  f"peak {fmt_mib(r['peak_vram_mib']):>6} MiB  ok={r['ok']}")
 
             # inert: wrapper attached (adapter present via --ckpt if given, but no prompt -> baseline
             # condition == clear_prompt, an identity gate; isolates the architectural tax alone)
@@ -193,7 +174,7 @@ def phase_arms(a) -> list[dict]:
                 length=length, conditions=["baseline"], **sampler_kw), gpu=a.gpu)
             rows.append({"arm": "inert", "sampler": sampler_name, "length": length, **r})
             print(f"[m10:arms] inert   s={sampler_name} L={length}  {r['seconds']:>7.1f}s  "
-                  f"peak {r['peak_vram_mib']:>6} MiB  ok={r['ok']}")
+                  f"peak {fmt_mib(r['peak_vram_mib']):>6} MiB  ok={r['ok']}")
 
             if a.ckpt and a.prompt_pdb:
                 r = _run_generate(_base_overrides(
@@ -202,7 +183,7 @@ def phase_arms(a) -> list[dict]:
                     + [f"eval.prompt_pdb={a.prompt_pdb}"], gpu=a.gpu)
                 rows.append({"arm": "cold", "sampler": sampler_name, "length": length, **r})
                 print(f"[m10:arms] cold    s={sampler_name} L={length}  {r['seconds']:>7.1f}s  "
-                      f"peak {r['peak_vram_mib']:>6} MiB  ok={r['ok']}")
+                      f"peak {fmt_mib(r['peak_vram_mib']):>6} MiB  ok={r['ok']}")
 
             if a.ckpt and a.prompt_cache:
                 r = _run_generate(_base_overrides(
@@ -211,7 +192,7 @@ def phase_arms(a) -> list[dict]:
                     + [f"eval.prompt_cache={a.prompt_cache}"], gpu=a.gpu)
                 rows.append({"arm": "warm", "sampler": sampler_name, "length": length, **r})
                 print(f"[m10:arms] warm    s={sampler_name} L={length}  {r['seconds']:>7.1f}s  "
-                      f"peak {r['peak_vram_mib']:>6} MiB  ok={r['ok']}")
+                      f"peak {fmt_mib(r['peak_vram_mib']):>6} MiB  ok={r['ok']}")
     return rows
 
 
@@ -230,7 +211,7 @@ def phase_ksweep(a) -> list[dict]:
             + [f"eval.prompt_pdb={a.prompt_pdb}"], gpu=a.gpu)
         rows.append({"k": k, "length": length, **r})
         print(f"[m10:k-sweep] K={k:>3}  {r['seconds']:>7.1f}s  ({r['seconds']/k:>6.2f}s/design)  "
-              f"peak {r['peak_vram_mib']:>6} MiB  ok={r['ok']}")
+              f"peak {fmt_mib(r['peak_vram_mib']):>6} MiB  ok={r['ok']}")
     return rows
 
 
@@ -254,7 +235,9 @@ def phase_msweep(a) -> list[dict]:
                     ckpt=a.ckpt, length=length, conditions=["spa"], lam=a.lam, **_SAMPLERS["100"])
                     + [prompt_flag], gpu=a.gpu)
                 total += r["seconds"]
-                peak = max(peak, r["peak_vram_mib"])
+                # ⛔ None means NOT MEASURED and must not collapse to 0 in a max()
+                if r["peak_vram_mib"] is not None:
+                    peak = max(peak or 0, r["peak_vram_mib"])
                 if not r["ok"]:
                     print(f"[m10:m-sweep] {label} m={m} invocation {i} FAILED: {r['stderr_tail'][:300]}")
             rows.append({"regime": label, "m": m, "total_seconds": round(total, 2),
