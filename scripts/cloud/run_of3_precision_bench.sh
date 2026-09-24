@@ -138,7 +138,15 @@ log "--- the ONLY difference between the two arms ---"; diff "$OUT/fp32.yml" "$O
 # Writing a second refold harness is the duplicate docs/CAPABILITIES.md exists to prevent.
 run_arm() {                                   # run_arm <label> <yaml>
   [ $# -eq 2 ] || { log "FATAL: run_arm takes 2 args, got $#"; return 2; }
-  local label=$1 yml=$2 d="$OUT/$label"
+  # ⛔ TWO SEPARATE `local` STATEMENTS, DELIBERATELY. `local label=$1 d="$OUT/$label"` on ONE line dies
+  # under `set -u` with "label: unbound variable", because every argument to the `local` builtin is
+  # word-expanded BEFORE the builtin assigns any of them, so $label is still unset when $d expands.
+  # ⚠️ `bash -n` does NOT catch this (it is a runtime expansion, not a syntax error) and it cost a third
+  # H100 provisioning cycle. It reproduces locally in one line:
+  #     bash -c 'set -u; f(){ local a=$1 b="X/$a"; echo "$b"; }; f hi'
+  # ⇒ shellcheck catches it; run it on this file before submitting.
+  local label=$1 yml=$2
+  local d="$OUT/$label"
   mkdir -p "$d"
   log "=== ARM $label  ($(basename "$yml")) ==="
   # ⛔ DEFAULT ENV, not spa-verify-of3: the driver needs `spa`, and it passes --of3-conda-env down so
