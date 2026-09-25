@@ -85,7 +85,6 @@ YAML
 add_env(){ [ -z "${2:-}" ] && return 0; printf '        - name: %s\n          value: "%s"\n' "$1" "$2" >> "${CFG}"; }
 add_env PROJECT "${PROJECT}"
 add_env BUCKET "${BUCKET}"
-add_env OF3_CKPT_URI "${OF3_CKPT_URI}"
 add_env BACKBONE "${BACKBONE:-}"
 add_env NUM_SEQS "${NUM_SEQS:-}"
 add_env SEED "${SEED:-}"
@@ -93,7 +92,7 @@ add_env REPO_REF "${REPO_REF}"
 
 echo ">>> CustomJobSpec (${CFG}):"; sed 's/^/    /' "${CFG}"
 echo ">>> name=${NAME} region=${REGION} image=${IMAGE}"
-echo ">>> lengths=${LENGTHS}  repo_ref=${REPO_REF}"
+echo ">>> backbone=${BACKBONE:-<default>}  num_seqs=${NUM_SEQS:-<default>}  seed=${SEED:-<default>}  repo_ref=${REPO_REF}"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
   echo ">>> DRY_RUN=1, not submitting. Real command:"
