@@ -50,6 +50,12 @@ checkpoints/
 *.safetensors
 # Exception: published SPA adapter weights (adapter-only exports, ~90-130 MB each) — see models/README.md
 !models/*.pt
+# ...but NOT spa-1x1536-uncond.pt. It is 132,313,864 bytes, over GitHub's 100 MB HARD limit, and is
+# deliberately unpublished for exactly that reason (models/README.md). It is kept on disk for science
+# (the dev plan/120 projector ablation needs it) and pulled from
+# gs://genomancer-spa-cache/checkpoints/spa-1x1536-uncond/spa_B_final.pt when absent.
+# The un-ignore above would otherwise make it stageable by a plain `git add -A`.
+models/spa-1x1536-uncond.pt
 
 
 # ─── Caches: ESM3 tensor cache, prompt cache, preprocessed data ────────────

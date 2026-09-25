@@ -164,20 +164,56 @@ fi
 [ -n "$DETERMINISTIC" ] && DRAW_ARGS+=(eval.deterministic="$DETERMINISTIC") \
   && log "  determinism: eval.deterministic=$DETERMINISTIC"
 
+# Hydra variant group implied by a checkpoint's OWN keys, via
+# spa.model.projectors.variant_from_checkpoint. The architecture is a property of the FILE, so it
+# never needs declaring; declaring it only creates a way to be wrong. Prints "<group> <label>".
+infer_variant () {
+  "$PYTHON" - "$1" <<'SPA_INFER_PY'
+import sys, pathlib
+sys.path.insert(0, "/home/user1/projects/spa/structure-prompt-adapter/src")
+from spa.model.projectors import variant_from_checkpoint
+ck = pathlib.Path(sys.argv[1])
+GROUP = {"identity": "C_n_by_1536", "global_fanout": "B_1_by_1536", "clss": "A_1_by_32"}
+print(GROUP[variant_from_checkpoint(ck)["projector"]], ck.parent.name)
+SPA_INFER_PY
+}
+
 TOTAL=$(( NV * NP )); done_n=0; ok=0
 for entry in $VARIANTS; do
-  vname="${entry%%:*}"; ckpt_rel="${entry#*:}"
+  # TWO ENTRY FORMS. "variant:ckpt" is the LEGACY form and behaves exactly as before, including its
+  # output path, so every existing invocation and aggregator is unaffected. A BARE "ckpt" INFERS the
+  # variant and keys the output on the CHECKPOINT directory instead.
+  # WHY THE BARE FORM EXISTS: the Hydra variant group is the ARCHITECTURE, not the training run, so
+  # spa-Nx1536-uncond / -motif / -multigran are ALL C_n_by_1536. Keying output on the variant therefore
+  # COLLIDES whenever two arms share an architecture, silently overwriting one with the other. Fine for
+  # the 3-arm C/B/A grid this driver was written for; wrong for any checkpoint comparison WITHIN one
+  # architecture (dev plan/106 row 60).
+  case "$entry" in
+    *:*) vname="${entry%%:*}"; ckpt_rel="${entry#*:}"; label="$vname"; declared=1 ;;
+    *)   ckpt_rel="$entry"; vname=""; label=""; declared=0 ;;
+  esac
   ckpt="$REPO/checkpoints/$ckpt_rel"
   if [ ! -f "$ckpt" ]; then
-    log "SKIPPING variant $vname: no checkpoint at $ckpt"
+    log "SKIPPING ${vname:-$ckpt_rel}: no checkpoint at $ckpt"
     log "  (fetch: gcloud storage cp gs://genomancer-spa-cache/checkpoints/$ckpt_rel $ckpt)"
     done_n=$(( done_n + NP )); continue
   fi
-  log "=== variant $vname (ckpt $ckpt_rel) ==="
+  read -r inferred inferred_label < <(infer_variant "$ckpt") \
+    || die "could not infer the variant of $ckpt"
+  if [ "$declared" = 1 ]; then
+    # A declared variant that contradicts the weights is caught HERE, before a full model build.
+    # load_state_dict would raise on it anyway (strict=True), but only after loading RFdiffusion3.
+    [ "$vname" = "$inferred" ] \
+      || die "variant mismatch: entry declares '$vname' but $ckpt_rel is '$inferred'"
+  else
+    vname="$inferred"; label="$inferred_label"
+    log "  [variant] inferred $vname from $ckpt_rel; output keyed on '$label'"
+  fi
+  log "=== variant $vname (ckpt $ckpt_rel, out key '$label') ==="
   while IFS=$'\t' read -r id len; do
     [ -n "$id" ] || continue
-    done_n=$((done_n+1)); po="$OUT/$vname/$id"
-    log "  [$done_n/$TOTAL] $vname / $id (len $len)"
+    done_n=$((done_n+1)); po="$OUT/$label/$id"
+    log "  [$done_n/$TOTAL] $label / $id (len $len)"
     "$PYTHON" "$REPO/scripts/eval/run_flywheel.py" \
       variant="$vname" hardware=local_a5000 \
       'eval.conditions=[baseline,spa]' "eval.lambda_scale=[$LAM]" \
@@ -196,8 +232,8 @@ for entry in $VARIANTS; do
       +eval.flywheel.refolder.deterministic="$REFOLD_DETERMINISTIC" \
       +eval.flywheel.refolder.out_dir="$po" \
       eval.out_dir="$po" </dev/null \
-      && { ok=$((ok+1)); log "  [$done_n/$TOTAL] $vname / $id OK"; } \
-      || log "  [$done_n/$TOTAL] $vname / $id FAILED (continuing)"
+      && { ok=$((ok+1)); log "  [$done_n/$TOTAL] $label / $id OK"; } \
+      || log "  [$done_n/$TOTAL] $label / $id FAILED (continuing)"
   done < "$OUT/prompts.tsv"
 done
 
