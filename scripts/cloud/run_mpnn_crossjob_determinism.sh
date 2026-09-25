@@ -60,7 +60,7 @@ log "backbone sha256: $(sha256sum "$OUT/designs/$BACKBONE" | cut -c1-16)  ($(wc 
 log "=== running the PRODUCTION Stage-2 entry point ==="
 python "$SPA_REPO/scripts/eval/inverse_fold.py" \
     eval.proteinmpnn.design_dir="$OUT/designs" \
-    eval.proteinmpnn.out_dir="$OUT/seqs" \
+    eval.proteinmpnn.out_dir="$OUT" \
     eval.proteinmpnn.num_seqs="$NUM_SEQS" \
     eval.proteinmpnn.seed="$SEED" \
     paths.proteinmpnn_repo="$MPNN_REPO" \
@@ -76,23 +76,35 @@ log "=== the canonical hash ==="
 # only, in order, and hash those. Also emit the full-file hash separately so a header-only difference is
 # distinguishable from a sequence difference rather than being silently folded together.
 : > "$OUT/HASHES.txt"
-shopt -s nullglob
-for f in "$OUT/seqs"/*.fa "$OUT/seqs"/*.fasta; do
+# ⛔ RECURSIVE find, NOT a flat glob, and this is the THIRD time this class has bitten.
+# ProteinMPNN writes to <out_dir>/seqs/<stem>.fa, appending `seqs/` ITSELF, which configs/eval/default.yaml
+# warns about in as many words ("ProteinMPNN's <out_dir>/seqs/ layout made that outputs/eval/seqs/seqs/").
+# A first version passed out_dir="$OUT/seqs" AND globbed "$OUT/seqs/*.fa", so the files landed one level
+# deeper at $OUT/seqs/seqs/ and the glob found nothing: the run SUCCEEDED and the hash step reported
+# "NO FASTA PRODUCED". ⚠️ Same family as dev results/71 §4.2's `*.cif` glob missing `*.cif.gz`, which was
+# documented and then reproduced in test D. ⇒ find, do not glob, when another tool owns the layout.
+while IFS= read -r f; do
   seqonly=$(grep -v '^>' "$f" | sha256sum | cut -c1-12)
   wholefile=$(sha256sum "$f" | cut -c1-12)
   nseq=$(grep -c '^>' "$f")
-  printf 'SEQ %s  FILE %s  n=%s  %s\n' "$seqonly" "$wholefile" "$nseq" "$(basename "$f")" >> "$OUT/HASHES.txt"
-done
+  printf 'SEQ %s  FILE %s  n=%s  %s\n' "$seqonly" "$wholefile" "$nseq" "${f#$OUT/}" >> "$OUT/HASHES.txt"
+done < <(find "$OUT" -type f \( -name '*.fa' -o -name '*.fasta' \) | sort)
+# ⛔ PERSIST BEFORE ANY VERDICT OR EXIT. dev results/71 §4.2's lesson is that artifacts saved before the
+# verdict is computed turn an analysis bug into a $0 recovery; a first version of THIS runner exited 15 on
+# the empty-glob path BEFORE persisting, so the one file that would have explained it, stdout.log, was
+# destroyed with the container and two jobs had to be re-run. Persist first, always.
+log "=== persisting to GCS (BEFORE any verdict, deliberately) ==="
+gcloud storage cp -r "$OUT" "$GCS_OUT/" >/dev/null 2>&1 && log "artifacts at $GCS_OUT" || log "could not write $GCS_OUT"
+
 if [ ! -s "$OUT/HASHES.txt" ]; then
   # ⛔ An empty result must never look like a verdict (dev plan/118 §3).
-  log "⛔ NO FASTA PRODUCED. This is INDETERMINATE, not a determinism result. Contents of $OUT/seqs:"
-  ls -la "$OUT/seqs" 2>&1 | head
+  log "⛔ NO FASTA FOUND. This is INDETERMINATE, not a determinism result. Tree under $OUT:"
+  find "$OUT" -type f | head -20
+  log "--- tail of inverse_fold.py stdout ---"; tail -25 "$OUT/stdout.log" 2>/dev/null
   exit 15
 fi
 cat "$OUT/HASHES.txt"
 log "⇒ Compare the SEQ hash against the other region's job. Identical SEQ with differing FILE means only"
 log "  the headers moved, which is a provenance difference, not a model one."
 
-log "=== persisting to GCS ==="
-gcloud storage cp -r "$OUT" "$GCS_OUT/" >/dev/null 2>&1 && log "artifacts at $GCS_OUT" || log "could not write $GCS_OUT"
 log "=== DONE ==="
