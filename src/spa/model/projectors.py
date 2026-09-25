@@ -112,6 +112,59 @@ class GlobalFanoutProjector(nn.Module):
         return self.norm(self.fanout(prompt.mean(dim=1)).view(D, self.n_tokens, self.c_kv))
 
 
+def variant_from_checkpoint(ckpt_path, c_kv: int = 1536) -> dict:
+    """Infer a variant config from a SPA checkpoint's OWN keys, so it cannot be mis-declared.
+
+    ⭐ WHY THIS EXISTS. :func:`~spa.model.loader.attach_spa` builds the projector from ``cfg.variant``
+    *before* ``load_spa`` ever opens the checkpoint, because ``load_state_dict`` needs a target module
+    to already exist. So the caller has had to state an architecture the file itself already
+    determines. Every checkpoint was trained with exactly one projector, and its key set names that
+    projector uniquely:
+
+        no ``projector.*`` keys at all       -> identity        (N×1536; IdentityProjector is PARAMETER-FREE)
+        ``projector.structure_adapter.*``    -> clss            (1×32)
+        ``projector.fanout.*`` and not above -> global_fanout   (1×1536)
+
+    ``n_tokens`` is recovered arithmetically from ``fanout.weight``, whose shape is
+    ``(n_tokens * c_kv, in_features)``.
+
+    ⛔ THE POINT IS TO MAKE A MISMATCH UNREPRESENTABLE, not merely loud. It is already loud:
+    ``load_spa`` calls ``load_state_dict`` with default ``strict=True`` and there is no
+    ``strict=False`` anywhere in this repo, so a wrong declaration raises on missing or unexpected keys
+    before anything is generated. But a flag the caller must set correctly is one more thing to get
+    wrong, and reading it off the file removes the degree of freedom entirely. Same reasoning as the
+    determinism defaults: an omitted opt-in is indistinguishable from a chosen opt-out.
+
+    ⚠️ ``name`` is COSMETIC on the eval path (only ``spa.train.harness`` reads ``cfg.variant.name``, for
+    W&B tags and checkpoint filenames), and is returned in the project's dims convention rather than the
+    old A/B/C letters.
+
+    ⚠️ This identifies the ARCHITECTURE, never WHICH TRAINING RUN produced the weights. The three
+    N×1536 adapters share key set, shapes and file size (94,526,980 bytes), so ``uncond`` / ``motif`` /
+    ``multigran`` are indistinguishable here; sha256 is the only disambiguator.
+    """
+    import torch
+
+    obj = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+    if isinstance(obj, dict) and "adapter" in obj and "optimizer" in obj:
+        obj = obj["adapter"]          # a full-state snapshot keeps the adapter under "adapter"
+    keys = set(obj)
+    fan = obj.get("projector.fanout.weight")
+    n_tokens = None if fan is None else int(fan.shape[0]) // int(c_kv)
+
+    if any(k.startswith("projector.structure_adapter.") for k in keys):
+        return {"name": "1x32", "projector": "clss", "n_tokens": n_tokens,
+                "use_clss": True, "clss_model_name": "CLSS-sub.lckpt", "strip_bos_eos": True}
+    if fan is not None:
+        return {"name": "1x1536", "projector": "global_fanout", "n_tokens": n_tokens,
+                "strip_bos_eos": True, "use_clss": False}
+    stray = sorted(k for k in keys if k.startswith("projector."))
+    if stray:
+        raise ValueError(f"{ckpt_path}: projector.* keys match no known variant: {stray}")
+    return {"name": "Nx1536", "projector": "identity", "resampler_tokens": None,
+            "strip_bos_eos": True, "use_clss": False}
+
+
 def make_projector(variant_cfg, c_kv: int = 1536) -> nn.Module:
     """Build the front-end projector for a variant config (``configs/variant/*.yaml``)."""
     name = variant_cfg.projector

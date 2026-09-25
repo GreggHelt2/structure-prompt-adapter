@@ -12,7 +12,18 @@ exclusivity by construction, which we then **measure** via the cross terms below
 The chain is a fixed 3-region contig ``R1 | M | R2`` (motif always in the middle). Each cell chooses a
 target for each flank, ``R1,R2 ∈ {free, G1, G2}``. The **headliner** cell is ``g1:g2`` =
 ``SPA-G1 : M : SPA-G2`` — two regions, two folds, one pinned motif, one design (dev: two-steer note;
-three-way spec is dev ``21``). N×1536 (variant C) only — the sole variant that honors a per-residue mask.
+three-way spec is dev ``21``).
+
+The variant is **inferred from ``--ckpt``** via :func:`spa.model.projectors.variant_from_checkpoint`,
+so the architecture cannot be mis-declared against the weights.
+⛔ **CORRECTED**: this line previously read "N×1536 (variant C) only — the sole variant that honors a
+per-residue mask", which conflated two different masks. The **design-side** ``profile`` is what routes a
+prompt to a region, it is indexed by the DESIGN length and is **variant-agnostic**
+(``cross_attention.py``: ``term = term * prof.view(1, -1, 1)``). What needs M=N is the **prompt-side**
+``key_padding_mask``, which is silently dropped when a projector changes the token count and matters
+for hard⊕soft non-overlap (dev ``15`` §3 item #2). ⇒ regional steering IS expressible on a pooled
+variant; what a pooled variant loses is per-residue PROMPT correspondence, which is exactly what the
+dev ``120`` projector ablation measures.
 
 Metrics (all paired to the ``free:free`` baseline, same seed ⇒ identical initial noise):
   - **motif-RMSD(M)**  ≈ 0 in every cell, Δ ≈ 0 ⇒ the pin holds even with two live profiles (the novel
@@ -213,8 +224,14 @@ def run_two_steer(args):
 
     base_model = {"c_query": 768, "c_kv": 1536, "c_model": 768, "n_head": 8, "shared_kv": True,
                   "zero_init_output": True, "lambda_init": 1.0, "input_rmsnorm": True}
-    base_variant = {"name": "C", "projector": "identity", "resampler_tokens": None,
-                    "strip_bos_eos": True, "use_clss": False}
+    # ⭐ INFERRED from the checkpoint's own keys, never declared. The projector is a property of the
+    # file, and stating it separately is a degree of freedom whose only use is to be wrong. For an
+    # N×1536 checkpoint this returns the same fields the hardcoded dict used to (only the cosmetic
+    # `name` differs: "Nx1536" rather than "C", and nothing on the eval path reads it).
+    from spa.model.projectors import variant_from_checkpoint
+    base_variant = variant_from_checkpoint(args.ckpt, c_kv=base_model["c_kv"])
+    print(f"[variant] inferred from {os.path.basename(args.ckpt)}: "
+          f"projector={base_variant['projector']} n_tokens={base_variant.get('n_tokens')}")
 
     # Fixed contig (only prompts/profiles vary per cell) ⇒ build the engine ONCE. Optional RFD3-free
     # spacers decouple each soft region from the pinned motif / chain termini (dev: spacer probe).
