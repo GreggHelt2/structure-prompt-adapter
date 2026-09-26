@@ -52,12 +52,48 @@ DEFAULT_TIMEOUT = 3600.0
 POLL = 5.0
 
 
+MIN_REASON = 12
+
+
 def _lock_path() -> str | None:
-    """Resolve the lock file, or None when disabled."""
+    """Resolve the lock file, or None when disabled.
+
+    ⛔⛔ DISABLING REQUIRES A WRITTEN REASON in ``SPA_GEN_LOCK_REASON`` (added 2026-09-25). Before this,
+    ``SPA_GEN_LOCK=0`` printed nothing and required nothing, so a considered override and a copy-pasted
+    one were byte-identical to every reader and every checker. That is the property the determinism
+    defaults were changed to fix: an omitted opt-in is indistinguishable from a chosen opt-out.
+
+    ⭐ MEASURED. On 2026-09-25 queue row 60 disabled the mutex for 8 concurrent generation lanes,
+    justified by ``spa_pmax``, which models the RFdiffusion3 footprint ALONE. Each lane also loaded its
+    own ESM3, so the real peak was 23.48 GiB of 23.55 and the run died at cell 2 after an hour. ⇒ the
+    override was not reckless, it was reasoned from a model that did not cover the workload, and the only
+    reason string available was "because spa_pmax says so", which is the sentence that would have failed
+    review. Writing the reason down is what surfaces that.
+
+    ⚠️ Enforced at the READ site deliberately. A check in a driver's preflight is opt-in: a script that
+    does not source it gets no guard and no warning, which dev ``WORKING_AGREEMENTS`` §5.4 records as the
+    standing weakness of that layer. This function is called by the code that actually locks, so it
+    cannot be bypassed by omitting a line. Same reasoning as ``SPA_SERIAL_REASON``'s 12-char floor, which
+    this matches so there is one convention rather than two.
+
+    ⛔ RAISES rather than warning, because a warning into a log nobody reads is how the dual-run guard was
+    disabled invisibly on 2026-09-22 (dev ``plan/106`` §0b item 2, approved by Gregg that day).
+    """
     raw = os.environ.get("SPA_GEN_LOCK")
     if raw is not None:
         v = raw.strip()
         if v in ("0", "", "off", "false", "no"):
+            why = (os.environ.get("SPA_GEN_LOCK_REASON") or "").strip()
+            if len(why) < MIN_REASON:
+                raise RuntimeError(
+                    f"SPA_GEN_LOCK={raw!r} disables the generation mutex, which exists because two "
+                    f"concurrent generation streams OOM'd a 24 GB card and killed two runs "
+                    f"(2026-09-02). Set SPA_GEN_LOCK_REASON to at least {MIN_REASON} characters saying "
+                    f"WHY it is safe here, and state the VRAM arithmetic including every model each "
+                    f"process loads, not only RFdiffusion3's. "
+                    f"⛔ spa_pmax models RFD3 ALONE: a lane that also loads ESM3 costs ~2 to 4.6 GB more "
+                    f"than it predicts, which is how row 60 reached 23.48 GiB of 23.55 on 2026-09-25.")
+            print(f"[gen-lock] ⚠️ DISABLED BY THE CALLER: {why}", flush=True)
             return None
         if v not in ("1", "on", "true", "yes"):
             return v                      # an explicit path
