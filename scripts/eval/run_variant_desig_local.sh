@@ -85,6 +85,13 @@ DETERMINISTIC="${DETERMINISTIC:-}"
 # never reached the refolder. Set REFOLD_DETERMINISTIC=false only for a deliberate non-deterministic
 # refold, and say so in the run's plan/106 row.
 REFOLD_DETERMINISTIC="${REFOLD_DETERMINISTIC:-true}"
+# ⛔ CONDITIONS, DEFAULT baseline,spa (unchanged for every existing caller). Set CONDITIONS=spa to run
+# the SPA arm ONLY, when a byte-identical deterministic baseline already exists elsewhere and this run
+# would merely regenerate it. Valid ONLY under determinism: at a fixed seed and length the baseline's
+# initial noise x_T is SPA-independent, so a v3 baseline from another run pairs at matched seed (dev
+# plan/106 row 41: reuse row 35's v3 lambda=0 arm). ⚠️ With CONDITIONS=spa there is NO in-run baseline,
+# so the paired baseline-vs-SPA comparison must be done against that external baseline, not here.
+CONDITIONS="${CONDITIONS:-baseline,spa}"
 BAND="${BAND:-le256}"
 OF3_ENV="${OF3_ENV:-spa-verify-of3}"
 SCRMSD_ATOMS="${SCRMSD_ATOMS:-CA}"
@@ -150,6 +157,7 @@ log "===== VARIANT / λ SOFT-DESIGNABILITY, LOCAL ====="
 log "  sampler:  ARM=$ARM -> ${SAMPLER_ARGS[*]}"
 log "  scoring:  scrmsd_atoms=$SCRMSD_ATOMS cutoff=${SCRMSD_CUTOFF}A  (refolds RETAINED)"
 log "  grid:     $NV variant(s) x $NP prompt(s) (band=$BAND) x lambda=[$LAM], K=$K N=$NSEQ"
+log "  conditions: [$CONDITIONS]$([ "$CONDITIONS" = "baseline,spa" ] || echo '  ⚠️ NON-DEFAULT: pair against an external baseline')"
 log "  prep:     $PREP"
 log "  out:      $OUT"
 
@@ -216,7 +224,7 @@ for entry in $VARIANTS; do
     log "  [$done_n/$TOTAL] $label / $id (len $len)"
     "$PYTHON" "$REPO/scripts/eval/run_flywheel.py" \
       variant="$vname" hardware=local_a5000 \
-      'eval.conditions=[baseline,spa]' "eval.lambda_scale=[$LAM]" \
+      "eval.conditions=[$CONDITIONS]" "eval.lambda_scale=[$LAM]" \
       "${DRAW_ARGS[@]}" eval.proteinmpnn.num_seqs="$NSEQ" \
       "${SAMPLER_ARGS[@]}" \
       "eval.score.scrmsd_atoms='$SCRMSD_ATOMS'" \
