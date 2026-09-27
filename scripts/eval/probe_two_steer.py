@@ -86,19 +86,29 @@ def _parse_cells(spec):
     return cells
 
 
-def _spacered_partition(motif_seg, r1_len, r2_len, sp_inner, sp_term):
+def _spacered_partition(motif_seg, r1_len, r2_len, sp_inner, sp_term, no_motif=False, mid_len=None):
     """Contig ``[Ns] R1 [s] M [s] R2 [Ns]`` with RFD3-FREE spacers (s=inner, Ns=terminal). Free residues
     decouple each soft region from the pinned motif M (and, terminally, from the chain ends), giving R1/R2
     geometric slack to adopt their folds without conforming to an immediately-adjacent foreign motif (dev:
     spacer probe; motivated by the Fig-2 self-prompt vs two-steer tension, ``results/09``). Regions stay
     contiguous single blocks; spacer residues get profile 0 (RFD3 designs them freely). Returns
     ``(contig_str, M_idx, R1_idx, R2_idx, L)`` — the drop-in replacement for build_contig+build_partition
-    when either spacer > 0 (both 0 ⇒ caller uses the original path, so this is regression-inert)."""
+    when either spacer > 0 (both 0 ⇒ caller uses the original path, so this is regression-inert).
+
+    ``no_motif`` (dev row 55, insulation-by-PRESENCE): replace the middle M segment with an equal-length
+    RFD3-FREE (UNSTEERED) block, so ``L`` / region spans / spacers are byte-identical to the motif-present
+    contig but the middle 19 residues are diffused rather than coordinate-pinned. ``mid_len`` defaults to
+    ``_seg_len(motif_seg)`` so length is preserved by construction (caller need not compute it). The emitted
+    token is then a bare integer, which the contig grammar already accepts for a free gap (no grammar
+    change), and ``M_idx`` comes back EMPTY. Default ``no_motif=False`` ⇒ unchanged / regression-inert."""
     segs = []
     if sp_term:  segs.append(("_", sp_term))          # N-terminal spacer (before R1)
     segs.append(("R1", r1_len))
     if sp_inner: segs.append(("_", sp_inner))          # R1|M spacer
-    segs.append(("M", _seg_len(motif_seg)))
+    if no_motif:                                        # row 55: free UNSTEERED middle, L preserved, M_idx empty
+        segs.append(("_", int(mid_len) if mid_len is not None else _seg_len(motif_seg)))
+    else:
+        segs.append(("M", _seg_len(motif_seg)))
     if sp_inner: segs.append(("_", sp_inner))          # M|R2 spacer
     segs.append(("R2", r2_len))
     if sp_term:  segs.append(("_", sp_term))          # C-terminal spacer (after R2)
@@ -117,18 +127,21 @@ def _score_cell(outs, edir, cname, geom, src_struct, src_positions, g1_ca, g2_ca
     from spa.eval.score import _ca_array, motif_rmsd
 
     m_lo, m_hi, r1_lo, r1_hi, r2_lo, r2_hi, M_idx = geom
+    has_motif = bool(M_idx)          # row 55 --no-motif: empty M_idx ⇒ skip the motif columns (write None)
     rows = {}
     for idx, o in enumerate(outs):
         aa = o.atom_array
         write_pdb(aa, edir / f"{cname}_{idx}.pdb")
         dca = _ca_array(aa)
         rows[idx] = {
-            "motif_rmsd": motif_rmsd(aa, src_struct, M_idx, source_residues=src_positions),
+            "motif_rmsd": (motif_rmsd(aa, src_struct, M_idx, source_residues=src_positions)
+                           if has_motif else None),
             "tm_R1_G1": _slice_tm(dca, r1_lo, r1_hi, g1_ca),
             "tm_R1_G2": _slice_tm(dca, r1_lo, r1_hi, g2_ca),
             "tm_R2_G1": _slice_tm(dca, r2_lo, r2_hi, g1_ca),
             "tm_R2_G2": _slice_tm(dca, r2_lo, r2_hi, g2_ca),
-            "ca_M": dca[m_lo:m_hi], "ca_R1": dca[r1_lo:r1_hi], "ca_R2": dca[r2_lo:r2_hi],
+            "ca_M": (dca[m_lo:m_hi] if has_motif else None),
+            "ca_R1": dca[r1_lo:r1_hi], "ca_R2": dca[r2_lo:r2_hi],
         }
     return rows
 
@@ -145,8 +158,10 @@ def _tm_key(region, target):
 def _summarize_cell(base_rows, cell_rows, t1, t2, lam):
     """One cell: Δmotif, each flank's steer toward ITS target, and the cross terms (bleed check)."""
     def region_disp(key):
+        # row 55 --no-motif: ca_M is None ⇒ that region contributes no displacement (skip, not raise).
         vals = [1.0 - _pair_tm(cell_rows[i][key], base_rows[i][key])
-                for i in cell_rows if i in base_rows]
+                for i in cell_rows if i in base_rows
+                and cell_rows[i].get(key) is not None and base_rows[i].get(key) is not None]
         return sum(vals) / len(vals) if vals else None
 
     def steer(region, target):
@@ -155,10 +170,17 @@ def _summarize_cell(base_rows, cell_rows, t1, t2, lam):
             return None
         return _mean(cell_rows, k) - _mean(base_rows, k)
 
-    m_base, m_cell = _mean(base_rows, "motif_rmsd"), _mean(cell_rows, "motif_rmsd")
+    # motif columns only when the middle is a pinned motif (M_idx non-empty ⇒ rows carry a float
+    # motif_rmsd). Under row 55 --no-motif the middle is a free UNSTEERED block ⇒ report None.
+    has_motif = any(r.get("motif_rmsd") is not None for r in cell_rows.values())
+    if has_motif:
+        m_base, m_cell = _mean(base_rows, "motif_rmsd"), _mean(cell_rows, "motif_rmsd")
+        d_motif = m_cell - m_base
+    else:
+        m_base = m_cell = d_motif = None
     return {
         "lambda": lam, "R1_target": t1, "R2_target": t2,
-        "motif_rmsd_baseline": m_base, "motif_rmsd_cell": m_cell, "delta_motif_rmsd": m_cell - m_base,
+        "motif_rmsd_baseline": m_base, "motif_rmsd_cell": m_cell, "delta_motif_rmsd": d_motif,
         "M_disp": region_disp("ca_M"), "R1_disp": region_disp("ca_R1"), "R2_disp": region_disp("ca_R2"),
         # region×target TM in this cell (loc) — all four, so cross-talk is visible.
         "tm_R1_G1": _mean(cell_rows, "tm_R1_G1"), "tm_R1_G2": _mean(cell_rows, "tm_R1_G2"),
@@ -235,9 +257,13 @@ def run_two_steer(args):
 
     # Fixed contig (only prompts/profiles vary per cell) ⇒ build the engine ONCE. Optional RFD3-free
     # spacers decouple each soft region from the pinned motif / chain termini (dev: spacer probe).
+    # ``--no-motif`` (dev row 55) replaces the middle motif with an equal-length free UNSTEERED block;
+    # it always routes through _spacered_partition (the general R1|mid|R2 builder), even with sp=0.
     sp_in, sp_tm = int(args.inner_spacer or 0), int(args.term_spacer or 0)
-    if sp_in or sp_tm:
-        contig, M_idx, R1_idx, R2_idx, L = _spacered_partition(args.motif_seg, r1_len, r2_len, sp_in, sp_tm)
+    no_motif = bool(getattr(args, "no_motif", False))
+    if sp_in or sp_tm or no_motif:
+        contig, M_idx, R1_idx, R2_idx, L = _spacered_partition(
+            args.motif_seg, r1_len, r2_len, sp_in, sp_tm, no_motif=no_motif)
     else:
         contig, order = build_contig(args.motif_seg, r1_len, r2_len, "BAC")  # B=R1, A=M, C=R2
     # ONE sampler configuration for the whole run, all three knobs together. Selecting an arm
@@ -246,23 +272,33 @@ def run_two_steer(args):
     from spa.eval.sampler_arms import resolve_with_legacy
     _sampler = resolve_with_legacy(getattr(args, "sampler_arm", None), args.num_timesteps)
     print(f"[sampler] arm={getattr(args, 'sampler_arm', None)} -> {_sampler}")
+    # ⚠️ no-motif (row 55): the contig is all-free (e.g. "47,16,19,16,46"), which build_motif and
+    # _parse_contig_motif_indices REJECT ("no motif segments"). So drive it as an UNCONDITIONAL design of
+    # length L instead: eval.motif=None ⇒ build_motif returns None ⇒ _run_once(engine, None); eval.length=L
+    # ⇒ resolve_specification sets the design length. The R1/R2 profiles still route by design index.
     cfg = OmegaConf.create({
         "paths": {"rfd3_ckpt": _rfd3_ckpt(getattr(args, "rfd3_ckpt", None))},
         "hardware": {"device": device},
         "model": base_model, "variant": base_variant,
-        "eval": {"num_designs": K, "length": None, "specification": None,
+        "eval": {"num_designs": K, "length": (int(L) if no_motif else None), "specification": None,
                  **_sampler, "deterministic": bool(getattr(args, "deterministic", False)),
-                 "seed": int(args.seed), "ckpt": args.ckpt,
-                 "out_dir": str(out_dir), "motif": {"source_pdb": motif_pdb, "contig": contig}},
+                 "seed": int(args.seed), "ckpt": args.ckpt, "out_dir": str(out_dir),
+                 "motif": (None if no_motif else {"source_pdb": motif_pdb, "contig": contig})},
     })
-    if sp_in or sp_tm:
+    if no_motif:
+        motif_spec = None                                # unconditional design at length L; no pin
+        assert M_idx == [], "no-motif mode must produce an empty M_idx"
+        print(f"[2steer] NO-MOTIF: middle {_seg_len(args.motif_seg)} aa (replaces motif {args.motif_seg}) "
+              f"is UNSTEERED, L preserved (row 55 insulation-by-presence)")
+    elif sp_in or sp_tm:
         from spa.eval.generate import build_motif, _parse_contig_motif_indices
         motif_spec, _ = build_motif(cfg)
         assert sorted(_parse_contig_motif_indices(contig)) == M_idx, "spacer contig/M-idx mismatch"
     else:
         motif_spec, M_idx, R1_idx, R2_idx, L, _cr = build_partition(
             cfg, args.motif_seg, r1_len, r2_len, order)                      # U→R1, C→R2
-    m_lo, m_hi = _contiguous(M_idx); r1_lo, r1_hi = _contiguous(R1_idx); r2_lo, r2_hi = _contiguous(R2_idx)
+    m_lo, m_hi = (_contiguous(M_idx) if M_idx else (None, None))
+    r1_lo, r1_hi = _contiguous(R1_idx); r2_lo, r2_hi = _contiguous(R2_idx)
     geom = (m_lo, m_hi, r1_lo, r1_hi, r2_lo, r2_hi, M_idx)
     print(f"[2steer] contig {contig!r}  L={L}   R1[{r1_lo}:{r1_hi}]  M[{m_lo}:{m_hi}]  R2[{r2_lo}:{r2_hi}]")
 
@@ -298,15 +334,19 @@ def run_two_steer(args):
                                src_struct, src_positions, g1_ca, g2_ca)
         if (t1, t2) == ("free", "free"):
             base_rows = rows
-            print(f"[2steer]   baseline free:free   motif-RMSD {_mean(rows,'motif_rmsd'):.3f} Å   "
+            _mrm = (_mean(rows, "motif_rmsd")
+                    if any(r.get("motif_rmsd") is not None for r in rows.values()) else None)
+            _mrm_s = "n/a" if _mrm is None else f"{_mrm:.3f}"
+            print(f"[2steer]   baseline free:free   motif-RMSD {_mrm_s} Å   "
                   f"R1→G1 {_mean(rows,'tm_R1_G1'):.3f}  R2→G2 {_mean(rows,'tm_R2_G2'):.3f}", flush=True)
             continue
         s = _summarize_cell(base_rows, rows, t1, t2, lam)
         results.append(s)
         r1s = "  n/a " if s["R1_steer"] is None else f"{s['R1_steer']:+.3f}"
         r2s = "  n/a " if s["R2_steer"] is None else f"{s['R2_steer']:+.3f}"
+        dms = "  n/a " if s["delta_motif_rmsd"] is None else f"{s['delta_motif_rmsd']:+.3f}"
         print(f"[2steer]   {t1}:{t2:<4}  R1→{t1} steer {r1s}   R2→{t2} steer {r2s}   "
-              f"Δmotif {s['delta_motif_rmsd']:+.3f} Å", flush=True)
+              f"Δmotif {dms} Å", flush=True)
 
     summary = {"config": _config(args, cells, lam, L), "R1": [r1_lo, r1_hi], "M": [m_lo, m_hi],
                "R2": [r2_lo, r2_hi], "cells": results}
@@ -377,6 +417,15 @@ def main():
     ap.add_argument("--r2-lambda", type=float, default=None, help="per-region effective λ on R2 (overrides --lambda for R2)")
     ap.add_argument("--inner-spacer", type=int, default=0, help="free RFD3 residues inserted at R1|M and M|R2 (decouple soft regions from the pinned motif)")
     ap.add_argument("--term-spacer", type=int, default=0, help="free RFD3 residues at N-term (before R1) and C-term (after R2)")
+    ap.add_argument("--no-motif", action="store_true",
+                    help="ROW 55 insulation-by-PRESENCE: replace the middle Fixed Motif with an "
+                         "equal-length UNSTEERED (free RFD3) region so L, region spans and spacers are "
+                         "identical to the motif-present run (row 47 is the comparator), the only "
+                         "variable being whether the middle 19 residues are coordinate-pinned. The "
+                         "middle length defaults to _seg_len(--motif-seg) so L is preserved by "
+                         "construction; --motif-source/--motif-seg still set that length and are "
+                         "recorded for provenance but are NOT pinned. Default off = byte-identical to "
+                         "prior two-steer runs.")
     ap.add_argument("--cells", default="free:free,g1:g2,g2:g1,g1:g1,g2:g2,g1:free,free:g2",
                     help="comma list of R1:R2 target pairs; each side ∈ {free,g1,g2}. free:free is forced first.")
     ap.add_argument("--num-designs", type=int, default=8, help="K designs (paired noise)")
