@@ -34,7 +34,20 @@ def _runs(sse) -> list[tuple[int, int, str]]:
 
 
 def carve(pdb_path: str, n_seg: int = 2, min_seg: int = 5, max_seg: int = 12,
-          max_frac: float = 0.18) -> dict:
+          max_frac: float = 0.18, target_frac: float | None = None) -> dict:
+    """Carve a self-motif contig from a structure via biotite SSE.
+
+    Default mode (``target_frac=None``): the longest ``n_seg`` SS segments, each truncated to ``max_seg``,
+    total capped at ``max_frac`` of the chain. This is the historical behaviour used for the 25-fold set.
+
+    ⭐ Fraction-locked mode (``target_frac`` set, plan/124 V1): size EACH of the ``n_seg`` segments to a
+    CENTRAL window of ``round(target_frac * L / n_seg)`` residues so the motif is a CONSTANT fraction of the
+    chain regardless of length (``max_seg`` is ignored; the per-segment size is driven by the target). ⛔ A
+    fold is only feasible if it has ``n_seg`` SS segments each at least that long AND the window is at least
+    ``min_seg``; otherwise this raises ``ValueError`` (never a silently short/long motif). Feasibility across
+    a length range is bounded: the per-segment floor ``min_seg`` and each fold's available SS-segment lengths
+    squeeze the achievable fraction (see plan/124's V1 feasibility note).
+    """
     import biotite.structure as struc
 
     from spa.eval.score import _as_struct, _ca_array
@@ -44,6 +57,38 @@ def carve(pdb_path: str, n_seg: int = 2, min_seg: int = 5, max_seg: int = 12,
     sse = struc.annotate_sse(arr)                              # per-residue 'a'/'b'/'c', length L
     runs = [r for r in _runs(sse) if (r[1] - r[0] + 1) >= min_seg]
     runs.sort(key=lambda r: -(r[1] - r[0] + 1))               # longest first
+
+    if target_frac is not None:
+        # ⭐ Fraction-locked (plan/124 V1): each segment is a fixed fraction of L, so the motif fraction is
+        # held constant while the fold length varies. Segments GROW with L (unlike the default mode's fixed
+        # max_seg cap, where the fraction shrinks with L).
+        seg_target = max(min_seg, round(target_frac * L / n_seg))
+        chosen = []
+        for s, e, _k in runs:
+            if len(chosen) >= n_seg:
+                break
+            run_len = e - s + 1
+            if run_len < seg_target:                          # cannot host the target window on this SS run
+                continue
+            s2 = s + (run_len - seg_target) // 2              # central window of exactly seg_target
+            chosen.append((s2, s2 + seg_target - 1))
+        if len(chosen) < n_seg:
+            raise ValueError(
+                f"target_frac={target_frac}: {os.path.basename(pdb_path)} (L={L}) cannot host {n_seg} SS "
+                f"segments of {seg_target} res each (has {len(chosen)}); INFEASIBLE at this fraction")
+        chosen.sort()
+        toks, cursor = [], 0
+        for s, e in chosen:
+            if s > cursor:
+                toks.append(str(s - cursor))
+            toks.append(f"A{s + 1}-{e + 1}" if e > s else f"A{s + 1}")
+            cursor = e + 1
+        if cursor < L:
+            toks.append(str(L - cursor))
+        contig = ",".join(toks)
+        n_motif = sum(e - s + 1 for s, e in chosen)
+        return {"path": pdb_path, "len": L, "n_motif": n_motif, "frac": round(n_motif / L, 4),
+                "contig": contig, "segments": [[s, e] for s, e in chosen]}
 
     budget = max(min_seg, int(max_frac * L))
     chosen: list[tuple[int, int]] = []
@@ -84,6 +129,8 @@ def main() -> None:
     ap.add_argument("--pdb-dir", default=None)
     ap.add_argument("--uniprots", default=None)
     ap.add_argument("--pattern", default="AF-{u}-F1-model_v4_esmfold_v1.pdb")
+    ap.add_argument("--target-frac", type=float, default=None,
+                    help="fraction-locked mode (plan/124 V1): size each segment to target_frac*L/n_seg")
     args = ap.parse_args()
 
     items = []
@@ -96,9 +143,9 @@ def main() -> None:
     results = {}
     for uid, path in items:
         try:
-            r = carve(path)
+            r = carve(path, target_frac=args.target_frac)
             results[uid] = r
-            print(f"CONTIG {uid} {r['len']} {r['n_motif']} {r['contig']}")
+            print(f"CONTIG {uid} {r['len']} {r['n_motif']} frac={r.get('frac','?')} {r['contig']}")
         except Exception as e:  # noqa: BLE001
             print(f"ERROR  {uid} {e}")
     print(json.dumps(results, indent=2))
