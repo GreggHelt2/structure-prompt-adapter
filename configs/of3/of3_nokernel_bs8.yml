@@ -1,0 +1,25 @@
+# OpenFold3 runner-yaml — MSA-free, NO custom attention kernels, data_module_args.batch_size=8.
+# Identical to of3_nokernel.yml EXCEPT batch_size=8 (the triton kernels cannot batch, so bs>1 requires
+# the no-kernel path). Used with OF3Refolder(batch_patch_shim=scripts/eval/of3_batch_patch.py), which
+# monkeypatches OF3's three bs=1 guards so same-length batches fold in one forward (~2.49x on H100,
+# dev plan/24; plan/153 section 10.6). Per-sample determinism stands down at bs>1 (acceptable here:
+# plan/97 measured 0 designability verdict flips; plan/153 section 10.2).
+model_update:
+  presets:
+    - predict
+  custom:
+    settings:
+      memory:
+        eval:
+          use_deepspeed_evo_attention: false
+          use_triton_triangle_kernels: false
+          use_cueq_triangle_kernels: false
+
+experiment_settings:
+  use_msa_server: false
+  use_templates: false
+  seeds: [42]
+
+data_module_args:
+  num_workers: 2
+  batch_size: 8

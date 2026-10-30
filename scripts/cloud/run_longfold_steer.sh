@@ -69,12 +69,10 @@ fi
 export SUBSET_IDS="${SUBSET_IDS:-}"   # comma list -> run only these folds (smoke/validation); empty = all 28
 log "config: stage=$STAGE spa_ckpt=$SPA_CKPT_REL lambda=$LAM K=$K N=$NSEQ seeds=$SEEDS arm=$ARM subset=${SUBSET_IDS:-ALL}"
 
-# OF3 bs=8 batch shim (designability only). nokernel runner: the triton kernels cannot batch
-# (evoformer.py:915). Same mechanism run_threeway_sweep.sh uses (plan/153 section 10.6; dev plan/24).
-if [ "$STAGE" = "designability" ]; then
-  export OF3_BATCH_SHIM="$SPA_REPO/scripts/eval/of3_batch_patch.py"
-  export OF3_BATCH_SIZE="${OF3_BATCH_SIZE:-8}"
-fi
+# OF3 bs=8 (designability only) is passed to OF3Refolder as batch_patch_shim + the of3_nokernel_bs8.yml
+# runner (data_module_args.batch_size=8); the shim monkeypatches OF3's bs=1 guards. nokernel because the
+# triton kernels cannot batch (evoformer.py:915). plan/153 section 10.6; dev plan/24.
+OF3_BATCH_SHIM="$SPA_REPO/scripts/eval/of3_batch_patch.py"
 
 # --- Per-fold loop (id<TAB>length; soft-only, so the manifest carries length not a motif contig) ---
 python -c "import json,os
@@ -97,15 +95,15 @@ while IFS=$'\t' read -r id len; do
          "paths.rfd3_ckpt=/workspace/weights/rfd3_latest.ckpt"
          "eval.out_dir=$po" )
   if [ "$STAGE" = "designability" ]; then
+    # bs=8: batch_patch_shim + of3_nokernel_bs8.yml (data_module_args.batch_size=8) + deterministic=false
+    # (OF3Refolder RAISES if deterministic=true with a shim set; verified src/spa/eval/openfold3.py:133-140).
     ARGS+=( "eval.proteinmpnn.num_seqs=$NSEQ" "paths.proteinmpnn_repo=$MPNN_REPO"
             "+eval.flywheel.refolder._target_=spa.eval.openfold3.OF3Refolder"
             "+eval.flywheel.refolder.deterministic=false"
             "+eval.flywheel.refolder.ckpt_path=/workspace/weights/of3-p2-155k.pt"
-            "+eval.flywheel.refolder.runner_yaml=$SPA_REPO/configs/of3/of3_nokernel.yml"
+            "+eval.flywheel.refolder.runner_yaml=$SPA_REPO/configs/of3/of3_nokernel_bs8.yml"
+            "+eval.flywheel.refolder.batch_patch_shim=$OF3_BATCH_SHIM"
             "+eval.flywheel.refolder.out_dir=$po" )
-    # ⚠️ TODO-VERIFY before launch: how OF3Refolder receives bs=8. run_threeway_sweep.sh passes it via
-    # the OF3_BATCH_SHIM + OF3_BATCH_SIZE env (set above) which injects data_module_args.batch_size into
-    # the runner yaml; confirm OF3Refolder honors that env here, or add the batch_size as a refolder arg.
   else
     ARGS+=( "eval.flywheel.inverse_fold=false" )
   fi
