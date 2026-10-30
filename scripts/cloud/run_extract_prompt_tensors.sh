@@ -37,7 +37,12 @@ python -c "import json,os
 sub=set(x for x in os.environ.get('SUBSET_IDS','').split(',') if x)
 for p in json.load(open('$MAN'))['prompts']:
     if not sub or p['id'] in sub: print(p['id'])" > "$OUT/ids.txt"
-log "extracting $(wc -l < "$OUT/ids.txt") fold tensors"
+# EXTRA_IDS: additional CDDB accessions to extract from the hydrated cache (free, prep dominates).
+# e.g. the short/medium folds so the V2 dilution-vs-length analysis spans the full 52-373 aa range,
+# not just the long band. CDDB only (external PDBs come via the b4/prep pull below).
+for x in ${EXTRA_IDS//,/ }; do [ -n "$x" ] && echo "$x"; done >> "$OUT/ids.txt"
+sort -u "$OUT/ids.txt" -o "$OUT/ids.txt"
+log "extracting $(wc -l < "$OUT/ids.txt") CDDB fold tensors (28 stratified + EXTRA_IDS)"
 
 n=0; ok=0
 while read -r id; do
@@ -107,7 +112,66 @@ PY
   fi
 done
 
-log "uploading $ok CDDB + named .pt + .npy -> $OUT_URI/"
+# --- NEW recognizable >250 PDBs (plan/153 §9 #13 / G4): REAL PDB, in no cache, so FRESH ESM3 N×1536
+#     generation. Download from RCSB, extract the LONGEST polymer chain (the fold-bearing one: chain A
+#     for homo-oligomers, the LRR chain for the 1DFJ complex), then ONE ESM3 encode over all of them
+#     via precompute_prompts.py (loads ESM3 once). 15 folds: TIM(1GOX,2MNR) Rossmann(1GPD,6ADH,6LDH)
+#     propeller(2BAT) porin(2OMF) P450(2CPP) LRR(1DFJ) β-helix(1AIR,1DAB) α-solenoid(2BCT,1B3U)
+#     serpin(7API,1QLP) α-globular(1AO6 serum albumin, 1ANN annexin). 17 folds. ---
+GEN_IDS="${GEN_IDS:-1GOX,2MNR,1GPD,6ADH,6LDH,2BAT,2OMF,2CPP,1DFJ,1AIR,1DAB,2BCT,1B3U,7API,1QLP,1AO6,1ANN}"
+GENDIR="$OUT/gen"; mkdir -p "$GENDIR"
+for gid in ${GEN_IDS//,/ }; do
+  [ -z "$gid" ] && continue
+  if ! curl -fsSL "https://files.rcsb.org/download/$gid.pdb" -o "$GENDIR/${gid}_full.pdb"; then
+    log "gen $gid: RCSB download FAILED (skip)"; continue; fi
+  python - "$GENDIR/${gid}_full.pdb" "$GENDIR/$gid.pdb" "$gid" <<'PY'
+import sys
+from collections import defaultdict
+inp, outp, gid = sys.argv[1], sys.argv[2], sys.argv[3]
+res = defaultdict(set); lines = defaultdict(list)
+for ln in open(inp):
+    if ln.startswith("ATOM"):
+        ch = ln[21]; res[ch].add(ln[22:27]); lines[ch].append(ln)
+if not res:
+    print(f"  gen {gid}: no ATOM records"); sys.exit(1)
+best = max(res, key=lambda c: len(res[c]))
+with open(outp, "w") as f:
+    f.writelines(lines[best]); f.write("END\n")
+print(f"  gen {gid}: chain {best}, {len(res[best])} residues -> longest-chain PDB")
+PY
+done
+CHAINS=$(ls "$GENDIR"/*.pdb 2>/dev/null | grep -v '_full')
+if [ -n "$CHAINS" ]; then
+  log "ESM3-encoding $(echo "$CHAINS" | wc -w) recognizable PDBs (fresh N×1536) via precompute_prompts.py"
+  python "$SPA_REPO/scripts/eval/precompute_prompts.py" --pdbs $CHAINS --out-dir "$OUT" --device cuda \
+    && log "ESM3 encode OK" || log "ESM3 encode FAILED (continuing to upload what landed)"
+  for gid in ${GEN_IDS//,/ }; do
+    [ -f "$OUT/$gid.pt" ] || { log "gen $gid: no .pt produced"; continue; }
+    python - "$OUT/$gid.pt" "$OUT/$gid.npy" "$gid" <<'PY'
+import sys, numpy as np, torch
+src, dst, fid = sys.argv[1], sys.argv[2], sys.argv[3]
+obj = torch.load(src, map_location="cpu")
+def find(o):
+    if torch.is_tensor(o):
+        return o if (o.ndim == 2 and o.shape[-1] == 1536) else None
+    if isinstance(o, dict):
+        for v in o.values():
+            r = find(v)
+            if r is not None: return r
+    if isinstance(o, (list, tuple)):
+        for v in o:
+            r = find(v)
+            if r is not None: return r
+    return None
+t = find(obj)
+if t is None:
+    print(f"  gen {fid}: WARN no [L,1536] tensor"); sys.exit(0)
+a = t.float().cpu().numpy(); np.save(dst, a); print(f"  gen {fid}: {a.shape} -> {dst}")
+PY
+  done
+fi
+
+log "uploading $ok CDDB + named + generated .pt + .npy -> $OUT_URI/"
 gcloud storage cp "$OUT"/*.pt  "$OUT_URI/" 2>/dev/null
 gcloud storage cp "$OUT"/*.npy "$OUT_URI/" 2>/dev/null
 log "===== EXTRACT DONE: $ok/$n tensors -> $OUT_URI ====="
