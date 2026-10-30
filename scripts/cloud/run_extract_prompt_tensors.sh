@@ -72,7 +72,42 @@ PY
   ok=$((ok+1))
 done < "$OUT/ids.txt"
 
-log "uploading $ok .pt + .npy -> $OUT_URI/"
+# --- Named recognizable-fold prompts (plan/153 §9 #13 / G4): already ESM3-encoded by the b4 run and
+#     staged individually at eval/b4/prep (these are REAL PDB, NOT in the CDDB tar). Pull + convert to
+#     .npy so the same V2 dilution analysis can include the recognizable folds. 1CEX/1EMA are not in
+#     b4/prep (separate encodes) and are skipped. ---
+B4_IDS="${B4_IDS:-1QY3,6E6R,7RPN,7SBD,7YII,8SIU}"
+for bid in ${B4_IDS//,/ }; do
+  [ -z "$bid" ] && continue
+  if gcloud storage cp "$BUCKET/eval/b4/prep/$bid.pt" "$OUT/named_$bid.pt" 2>/dev/null; then
+    python - "$OUT/named_$bid.pt" "$OUT/named_$bid.npy" "$bid" <<'PY'
+import sys, numpy as np, torch
+src, dst, fid = sys.argv[1], sys.argv[2], sys.argv[3]
+obj = torch.load(src, map_location="cpu")
+def find(o):
+    if torch.is_tensor(o):
+        return o if (o.ndim == 2 and o.shape[-1] == 1536) else None
+    if isinstance(o, dict):
+        for v in o.values():
+            r = find(v)
+            if r is not None: return r
+    if isinstance(o, (list, tuple)):
+        for v in o:
+            r = find(v)
+            if r is not None: return r
+    return None
+t = find(obj)
+if t is None:
+    print(f"  named {fid}: WARN no [L,1536] tensor"); sys.exit(0)
+a = t.float().cpu().numpy(); np.save(dst, a); print(f"  named {fid}: {a.shape} -> {dst}")
+PY
+    log "named $bid pulled from b4/prep + converted"
+  else
+    log "named $bid NOT in b4/prep (skipped)"
+  fi
+done
+
+log "uploading $ok CDDB + named .pt + .npy -> $OUT_URI/"
 gcloud storage cp "$OUT"/*.pt  "$OUT_URI/" 2>/dev/null
 gcloud storage cp "$OUT"/*.npy "$OUT_URI/" 2>/dev/null
 log "===== EXTRACT DONE: $ok/$n tensors -> $OUT_URI ====="
