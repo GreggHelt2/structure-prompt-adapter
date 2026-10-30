@@ -17,6 +17,7 @@
 #   STAGE=adherence REGION=us-central1 SUBSET_IDS=<14 ids> ./submit_longfold_job.sh  # Stage-1 half B
 #   STAGE=designability REGION=us-west1 SUBSET_IDS=<ids> ./submit_longfold_job.sh    # Stage-2 (gated)
 #   SUBSET_IDS=<1 per class> STAGE=adherence ./submit_longfold_job.sh                # smoke
+#   LAMBDAS=1.5,2 STAGE=adherence REGION=us-west1 SUBSET_IDS=<strong-steering ids> ./submit_longfold_job.sh  # G0 λ-extend sweep (SPA-only, reuses the {0,1} baseline; plan/153 §9 #4)
 set -euo pipefail
 
 PROJECT="${PROJECT:-spa-dev-499900}"
@@ -65,6 +66,8 @@ add_env STAGE "${STAGE:-}"
 add_env SUBSET_IDS "${SUBSET_IDS:-}"   # comma list of fold ids -> run only these (region split / smoke); empty = all 28
 add_env ARM "${ARM:-}"                 # default rfd3 (200/0.6) in the runner
 add_env SEEDS "${SEEDS:-}"             # default [0,1] adherence / [0] designability in the runner
+add_env LAMBDAS "${LAMBDAS:-}"         # comma list -> eval.lambda_scale sweep, e.g. "1.5,2" (empty = manifest default 1); plan/153 §9 #4 (G0)
+add_env CONDITIONS "${CONDITIONS:-}"   # empty: a LAMBDAS sweep runs SPA-only [spa] (reuse the {0,1} baseline), else [baseline,spa]
 add_env PREP_URI "${PREP_URI:-}"
 add_env RESULTS_URI "${RESULTS_URI:-}"
 

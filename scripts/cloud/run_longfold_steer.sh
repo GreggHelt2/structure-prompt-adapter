@@ -84,6 +84,17 @@ log "ESM3 cache: $(find "$ESM3_CACHE_DIR" -name '*.pt' 2>/dev/null | wc -l) .pt 
 MAN="$SPA_REPO/$MANIFEST_REL"
 [ -f "$MAN" ] || { log "FATAL: manifest $MAN not found"; exit 1; }
 LAM=$(python -c "import json;print(json.load(open('$MAN'))['lambda_scale'])")
+# LAMBDAS env overrides the manifest's single lambda with a SWEEP, e.g. LAMBDAS="1.5,2" -> eval.lambda_scale=[1.5,2].
+# baseline (lambda=0) is ALWAYS run via eval.conditions=[baseline,spa]; one spa arm is produced per swept lambda.
+# This is the same lambda-list path results/96 (row68) swept through run_flywheel.py. plan/153 §9 #4 (G0 λ-extend).
+LAM="${LAMBDAS:-$LAM}"
+RESTAG=""; [ -n "${LAMBDAS:-}" ] && RESTAG="_lam$(echo "$LAMBDAS" | tr ',' '-')"  # sweep results go to a distinct name, never clobber the {0,1} run
+# A LAMBDAS sweep is ADDITIVE: the lambda=0 ("no SPA") baseline already exists from the {0,1} run, so by
+# default a sweep runs SPA-ONLY arms (eval.conditions=[spa]) and the aggregator differences them against the
+# stored baseline. Set CONDITIONS="[baseline,spa]" to force a fresh baseline. plan/153 §10.4 (additive extend).
+if [ -n "${CONDITIONS:-}" ]; then CONDS="$CONDITIONS";
+elif [ -n "${LAMBDAS:-}" ]; then CONDS="[spa]";
+else CONDS="[baseline,spa]"; fi
 K=$(python -c "import json;print(json.load(open('$MAN'))['num_designs'])")
 NSEQ=$(python -c "import json;print(json.load(open('$MAN'))['num_seqs'])")
 if [ "$STAGE" = "designability" ]; then SEEDS="${SEEDS:-[0]}"; else SEEDS="${SEEDS:-$(python -c "import json;print(json.load(open('$MAN'))['seeds'])")}"; fi
@@ -91,7 +102,7 @@ if [ "$STAGE" = "designability" ]; then SEEDS="${SEEDS:-[0]}"; else SEEDS="${SEE
 export SUBSET_IDS="${SUBSET_IDS:-}"   # comma list of fold ids -> run only these (region split / smoke); empty = all 28
 OF3_BATCH_SHIM="$SPA_REPO/scripts/eval/of3_batch_patch.py"
 STEM(){ echo "AF-$1-F1-model_v4_esmfold_v1"; }
-log "config: stage=$STAGE spa_ckpt=$SPA_CKPT_REL lambda=$LAM K=$K N=$NSEQ seeds=$SEEDS arm=$ARM subset=${SUBSET_IDS:-ALL}"
+log "config: stage=$STAGE spa_ckpt=$SPA_CKPT_REL lambda=$LAM conditions=$CONDS K=$K N=$NSEQ seeds=$SEEDS arm=$ARM subset=${SUBSET_IDS:-ALL} restag=${RESTAG:-none}"
 
 # --- Per-fold loop (id<TAB>length) ---
 python -c "import json,os
@@ -107,7 +118,7 @@ while IFS=$'\t' read -r id len; do
   [ -f "$pdb" ] || { log "[$n] $id FAILED: reference PDB missing ($pdb)"; continue; }
   log "[$n] fold $id (L=$len, soft-only self-prompt, stage=$STAGE)"
   ARGS=( variant=C_n_by_1536 hardware=cloud_h100
-         "eval.conditions=[baseline,spa]" "eval.lambda_scale=[$LAM]"
+         "eval.conditions=$CONDS" "eval.lambda_scale=[$LAM]"
          "eval.num_designs=$K" "eval.seeds=$SEEDS"
          "${SAMPLER_ARGS[@]}"
          eval.deterministic=true
@@ -136,7 +147,7 @@ while IFS=$'\t' read -r id len; do
     continue
   fi
   python "$SPA_REPO/scripts/eval/run_flywheel.py" "${ARGS[@]}" </dev/null \
-    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$STAGE/$id.json" 2>/dev/null && log "[$n] $id OK -> $RESULTS_URI/$STAGE/$id.json"; } \
+    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$STAGE/$id$RESTAG.json" 2>/dev/null && log "[$n] $id OK -> $RESULTS_URI/$STAGE/$id$RESTAG.json"; } \
     || log "[$n] $id FAILED (continuing)"
 done < "$OUT/prompts.tsv"
 log "===== LONGFOLD-STEER $STAGE DONE: $ok/$n folds -> $RESULTS_URI/$STAGE ====="
