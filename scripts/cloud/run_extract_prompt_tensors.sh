@@ -169,6 +169,8 @@ if t is None:
 a = t.float().cpu().numpy(); np.save(dst, a); print(f"  gen {fid}: {a.shape} -> {dst}")
 PY
   done
+  for c in $CHAINS; do gcloud storage cp "$c" "$OUT_URI/" 2>/dev/null; done
+  log "uploaded $(echo "$CHAINS" | wc -w) reference chain PDBs -> $OUT_URI/ (for G4-A TM scoring)"
 fi
 
 log "uploading $ok CDDB + named + generated .pt + .npy -> $OUT_URI/"
