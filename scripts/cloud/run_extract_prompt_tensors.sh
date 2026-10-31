@@ -40,7 +40,7 @@ for p in json.load(open('$MAN'))['prompts']:
 # EXTRA_IDS: additional CDDB accessions to extract from the hydrated cache (free, prep dominates).
 # e.g. the short/medium folds so the V2 dilution-vs-length analysis spans the full 52-373 aa range,
 # not just the long band. CDDB only (external PDBs come via the b4/prep pull below).
-for x in ${EXTRA_IDS//,/ }; do [ -n "$x" ] && echo "$x"; done >> "$OUT/ids.txt"
+for x in ${EXTRA_IDS:+${EXTRA_IDS//,/ }}; do [ -n "$x" ] && echo "$x"; done >> "$OUT/ids.txt"
 sort -u "$OUT/ids.txt" -o "$OUT/ids.txt"
 log "extracting $(wc -l < "$OUT/ids.txt") CDDB fold tensors (28 stratified + EXTRA_IDS)"
 
