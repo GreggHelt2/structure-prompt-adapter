@@ -22,8 +22,19 @@ log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 
 # --- SPA repo (for load_cache.sh + the manifest) ---
 [ -d "$SPA_REPO/.git" ] || git clone --depth 1 --branch "${REPO_REF:-main}" "${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}" "$SPA_REPO"
-pip install -e "$SPA_REPO" --no-deps -q   # REQUIRED so the generate step's precompute_prompts.py can `import spa` (same as run_cache_gen.sh / the flywheel runners; its omission is why the first generate failed with ModuleNotFoundError: No module named 'spa')
+pip install -e "$SPA_REPO" --no-deps -q   # REQUIRED so the generate step's precompute_prompts.py can `import spa`
 n=0; ok=0
+# --- Environment preamble PORTED VERBATIM from the proven ESM3 encoder run_cache_gen.sh (lines 55-80).
+#     The generate step runs ESM3 on the GPU, so it needs the same HF auth + driver-lib path the cache
+#     generator uses. Hand-rolling this script lost these; three failures (ModuleNotFound, then CUDA
+#     unavailable, then latently HF auth) all trace to a missing exemplar preamble line. ---
+export HF_TOKEN="$(gcloud secrets versions access latest --secret=spa-hf-token --project="$PROJECT")"
+export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
+export PATH="/usr/local/nvidia/bin:${PATH}"
+ldconfig 2>/dev/null || true
+python -c "import torch; assert torch.cuda.is_available(), 'no CUDA'; print('GPU:', torch.cuda.get_device_name(0), 'CUDA', torch.version.cuda)"
+python -c "from huggingface_hub import hf_hub_download; hf_hub_download('biohub/esm3-sm-open-v1','config.json'); print('  ESM3 HF auth OK')"
 MAN="$SPA_REPO/$MANIFEST_REL"
 [ -f "$MAN" ] || { log "FATAL: manifest $MAN not found"; exit 1; }
 
