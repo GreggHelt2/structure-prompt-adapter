@@ -22,9 +22,12 @@ log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 
 # --- SPA repo (for load_cache.sh + the manifest) ---
 [ -d "$SPA_REPO/.git" ] || git clone --depth 1 --branch "${REPO_REF:-main}" "${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}" "$SPA_REPO"
+pip install -e "$SPA_REPO" --no-deps -q   # REQUIRED so the generate step's precompute_prompts.py can `import spa` (same as run_cache_gen.sh / the flywheel runners; its omission is why the first generate failed with ModuleNotFoundError: No module named 'spa')
+n=0; ok=0
 MAN="$SPA_REPO/$MANIFEST_REL"
 [ -f "$MAN" ] || { log "FATAL: manifest $MAN not found"; exit 1; }
 
+if [ -z "${GENERATE_ONLY:-}" ]; then   # GENERATE_ONLY=1 skips hydrate + CDDB extract + b4 pull (those 34 tensors already landed); re-runs only the 17-fold generate
 # --- Hydrate the full ESM3 cache to NVMe (established load_cache.sh pattern) ---
 if [ ! -d "$ESM3_CACHE_DIR" ] || [ -z "$(ls -A "$ESM3_CACHE_DIR" 2>/dev/null)" ]; then
   log "hydrate ESM3 cache: $CACHE_TAR -> $ESM3_CACHE_DIR"
@@ -111,6 +114,8 @@ PY
     log "named $bid NOT in b4/prep (skipped)"
   fi
 done
+
+fi   # end GENERATE_ONLY guard (hydrate + CDDB extract + b4 pull)
 
 # --- NEW recognizable >250 PDBs (plan/153 §9 #13 / G4): REAL PDB, in no cache, so FRESH ESM3 N×1536
 #     generation. Download from RCSB, extract the LONGEST polymer chain (the fold-bearing one: chain A

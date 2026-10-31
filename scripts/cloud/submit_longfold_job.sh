@@ -70,6 +70,15 @@ add_env LAMBDAS "${LAMBDAS:-}"         # comma list -> eval.lambda_scale sweep, 
 add_env CONDITIONS "${CONDITIONS:-}"   # empty: a LAMBDAS sweep runs SPA-only [spa] (reuse the {0,1} baseline), else [baseline,spa]
 add_env PREP_URI "${PREP_URI:-}"
 add_env RESULTS_URI "${RESULTS_URI:-}"
+# tensor-extract job knobs (run_extract_prompt_tensors.sh):
+add_env GENERATE_ONLY "${GENERATE_ONLY:-}"   # 1 = skip hydrate + CDDB extract + b4 pull, re-run only the 17-fold ESM3 generate
+add_env GEN_IDS "${GEN_IDS:-}"               # comma list of recognizable PDB ids to ESM3-encode (default = the 17)
+add_env B4_IDS "${B4_IDS:-}"
+add_env EXTRA_IDS "${EXTRA_IDS:-}"
+# G4-A driver knobs (run_g4a_recognizable.sh):
+add_env G4A_GEN_IDS "${G4A_GEN_IDS:-}"
+add_env G4A_B4_IDS "${G4A_B4_IDS:-}"
+add_env LAM "${LAM:-}"
 
 case "${STRATEGY}" in
   ONDEMAND|STANDARD|on-demand|"") : ;;
