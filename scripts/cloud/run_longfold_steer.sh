@@ -110,6 +110,7 @@ sub=set(x for x in os.environ.get('SUBSET_IDS','').split(',') if x)
 for p in json.load(open('$MAN'))['prompts']:
     if not sub or p['id'] in sub: print(p['id']+chr(9)+str(p['length']))" > "$OUT/prompts.tsv"
 . "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"   # expands $ARM -> SAMPLER_ARGS (same as run_eval.sh)
+{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
 n=0; ok=0
 while IFS=$'\t' read -r id len; do
   n=$((n+1)); po="$OUT/$id"; stem="$(STEM "$id")"

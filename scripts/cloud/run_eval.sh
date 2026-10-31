@@ -20,6 +20,7 @@ MPNN_REPO="${MPNN_REPO:-/opt/ProteinMPNN}"
 # matching neither the paper nor the checkpoint (dev docs/plan/81 §7).
 ARM="${ARM:-ours}"
 . "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
+{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
 PREP=/workspace/prep
 OUT=/workspace/b1_out
 

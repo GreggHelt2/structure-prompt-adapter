@@ -53,6 +53,7 @@ NV=$(echo "$VARIANTS" | wc -w)
 # knobs together: a partial setting matches neither published configuration.
 ARM="${ARM:-ours}"
 . "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
+{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
 
 log "variant SOFT-designability: ${NV} variants × ${NP} prompts (band=$BAND), K=$K N=$NSEQ λ=$LAM"
 

@@ -48,6 +48,7 @@ gcloud storage cp "$BUCKET/$SPA_CKPT_REL" /workspace/weights/spa.pt
 [ "$STAGE" = "designability" ] && gcloud storage cp "$OF3_CKPT_URI" /workspace/weights/of3-p2-155k.pt
 OF3_BATCH_SHIM="$SPA_REPO/scripts/eval/of3_batch_patch.py"
 . "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"   # $ARM -> SAMPLER_ARGS (file is scripts/_sampler_arm.sh, NOT scripts/cloud/; matches run_longfold_steer.sh:112)
+{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
 
 # build the fold table: id<TAB>pt_uri<TAB>pdb_uri
 : > "$OUT/folds.tsv"
