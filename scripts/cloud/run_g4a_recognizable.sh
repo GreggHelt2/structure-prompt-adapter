@@ -47,7 +47,7 @@ gcloud storage cp "$RFD3_CKPT_URI" /workspace/weights/rfd3_latest.ckpt
 gcloud storage cp "$BUCKET/$SPA_CKPT_REL" /workspace/weights/spa.pt
 [ "$STAGE" = "designability" ] && gcloud storage cp "$OF3_CKPT_URI" /workspace/weights/of3-p2-155k.pt
 OF3_BATCH_SHIM="$SPA_REPO/scripts/eval/of3_batch_patch.py"
-. "$(dirname "${BASH_SOURCE[0]}")/_sampler_arm.sh"   # $ARM -> SAMPLER_ARGS
+. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"   # $ARM -> SAMPLER_ARGS (file is scripts/_sampler_arm.sh, NOT scripts/cloud/; matches run_longfold_steer.sh:112)
 
 # build the fold table: id<TAB>pt_uri<TAB>pdb_uri
 : > "$OUT/folds.tsv"
