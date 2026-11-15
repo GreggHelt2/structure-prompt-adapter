@@ -20,6 +20,10 @@
 # NB: NOT `set -e`. DRAFT: validate with DRY_RUN=1, then a tiny smoke (1 fold per class) first.
 set -uo pipefail
 
+# Shared cloud-driver helpers (dev plan/156): retention upload + the invariant preamble steps.
+. "$(dirname "${BASH_SOURCE[0]}")/_cloud_preamble.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/_push_results.sh"
+
 PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 CACHE_TAR="${CACHE_TAR:-$BUCKET/esm3_cache.tar}"               # the full ESM3 prompt cache (all CDDB splits)
@@ -31,6 +35,7 @@ SPA_CKPT_REL="${SPA_CKPT_REL:-checkpoints/spa-Nx1536-uncond/spa_C_final.pt}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 MPNN_REPO="${MPNN_REPO:-/opt/ProteinMPNN}"
 STAGE="${STAGE:-adherence}"                 # adherence | designability
+PUSH_MODE=$([ "$STAGE" = "designability" ] && echo desig || echo gen)  # structures to retain (dev plan/156)
 ARM="${ARM:-rfd3}"                          # rfd3 = 200 / gamma_0 0.6 (RFD3 paper sampler; plan/153 section 10.3)
 MANIFEST_REL="${MANIFEST_REL:-configs/eval/manifest_longfold_steer.json}"
 # Scratch = the a3 local-SSD RAID0 (mounts at /workspace on this image; auto-RAID0, ~750 GB), same as
@@ -43,14 +48,12 @@ OUT="$SCRATCH/longfold_out"
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 
 # --- GPU sanity ---
-export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
-export PATH="/usr/local/nvidia/bin:${PATH}"; ldconfig 2>/dev/null || true
+spa_gpu_ld_path
 python -c "import torch; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0))"
 [ "$STAGE" = "designability" ] && conda run -n spa-verify-of3 python -c "import torch, triton; print('OF3 env: triton', triton.__version__)"
 
 # --- SPA repo + ProteinMPNN (MPNN only for designability) ---
-[ -d "$SPA_REPO/.git" ] || git clone --depth 1 --branch "${REPO_REF:-main}" "${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}" "$SPA_REPO"
-pip install -e "$SPA_REPO" --no-deps -q
+spa_install_repo "$SPA_REPO"
 [ "$STAGE" = "designability" ] && { [ -d "$MPNN_REPO" ] || git clone --depth 1 https://github.com/dauparas/ProteinMPNN "$MPNN_REPO"; }
 
 # --- Secrets (NGC for the CDDB pull, as run_train.sh) ---
@@ -109,8 +112,7 @@ python -c "import json,os
 sub=set(x for x in os.environ.get('SUBSET_IDS','').split(',') if x)
 for p in json.load(open('$MAN'))['prompts']:
     if not sub or p['id'] in sub: print(p['id']+chr(9)+str(p['length']))" > "$OUT/prompts.tsv"
-. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"   # expands $ARM -> SAMPLER_ARGS (same as run_eval.sh)
-{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
+spa_require_sampler_arm "${BASH_SOURCE[0]}"   # expands $ARM -> SAMPLER_ARGS (same as run_eval.sh)
 n=0; ok=0
 while IFS=$'\t' read -r id len; do
   n=$((n+1)); po="$OUT/$id"; stem="$(STEM "$id")"
@@ -145,10 +147,13 @@ while IFS=$'\t' read -r id len; do
   if [ -n "${DRY_RUN:-}" ]; then
     python "$SPA_REPO/scripts/eval/run_flywheel.py" --cfg job "${ARGS[@]}" >/dev/null 2>"$OUT/$id.dry.err" \
       && { log "[$n] $id DRY_RUN parse OK"; ok=$((ok+1)); } || { log "[$n] $id DRY_RUN parse FAILED"; tail -5 "$OUT/$id.dry.err" >&2; }
+    spa_push_results "$po" "$RESULTS_URI/$STAGE/cells" "$PUSH_MODE"   # prints the planned upload under DRY_RUN
     continue
   fi
   python "$SPA_REPO/scripts/eval/run_flywheel.py" "${ARGS[@]}" </dev/null \
-    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$STAGE/$id$RESTAG.json" 2>/dev/null && log "[$n] $id OK -> $RESULTS_URI/$STAGE/$id$RESTAG.json"; } \
+    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$STAGE/$id$RESTAG.json" 2>/dev/null; \
+         spa_push_results "$po" "$RESULTS_URI/$STAGE/cells" "$PUSH_MODE"; \
+         log "[$n] $id OK -> $RESULTS_URI/$STAGE/$id$RESTAG.json + structures"; } \
     || log "[$n] $id FAILED (continuing)"
 done < "$OUT/prompts.tsv"
 log "===== LONGFOLD-STEER $STAGE DONE: $ok/$n folds -> $RESULTS_URI/$STAGE ====="

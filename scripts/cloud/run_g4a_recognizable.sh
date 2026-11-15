@@ -12,6 +12,10 @@
 # NB: NOT set -e; validate DRY_RUN=1 then a 1-per-class smoke first.
 set -uo pipefail
 
+# Shared cloud-driver helpers (dev plan/156): retention upload + the invariant preamble steps.
+. "$(dirname "${BASH_SOURCE[0]}")/_cloud_preamble.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/_push_results.sh"
+
 PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 TENS_URI="${TENS_URI:-$BUCKET/eval/longfold_steer/prompt_tensors}"
@@ -23,6 +27,7 @@ SPA_CKPT_REL="${SPA_CKPT_REL:-checkpoints/spa-Nx1536-uncond/spa_C_final.pt}"
 SPA_REPO="${SPA_REPO:-/opt/spa}"
 MPNN_REPO="${MPNN_REPO:-/opt/ProteinMPNN}"
 STAGE="${STAGE:-adherence}"
+PUSH_MODE=$([ "$STAGE" = "designability" ] && echo desig || echo gen)  # structures to retain (dev plan/156)
 ARM="${ARM:-rfd3}"                       # 200 / gamma_0 0.6
 LAM="${LAM:-1}"
 K="${K:-8}"
@@ -35,20 +40,17 @@ SCRATCH="${SCRATCH:-/workspace}"; OUT="$SCRATCH/g4a_out"; mkdir -p "$OUT" "$SCRA
 [ "$STAGE" = "designability" ] && SEEDS="${SEEDS_DES:-[0]}"
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
-export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
-export PATH="/usr/local/nvidia/bin:${PATH}"; ldconfig 2>/dev/null || true
+spa_gpu_ld_path
 python -c "import torch; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0))"
 
-[ -d "$SPA_REPO/.git" ] || git clone --depth 1 --branch "${REPO_REF:-main}" "${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}" "$SPA_REPO"
-pip install -e "$SPA_REPO" --no-deps -q
+spa_install_repo "$SPA_REPO"
 [ "$STAGE" = "designability" ] && { [ -d "$MPNN_REPO" ] || git clone --depth 1 https://github.com/dauparas/ProteinMPNN "$MPNN_REPO"; }
 mkdir -p /workspace/weights
 gcloud storage cp "$RFD3_CKPT_URI" /workspace/weights/rfd3_latest.ckpt
 gcloud storage cp "$BUCKET/$SPA_CKPT_REL" /workspace/weights/spa.pt
 [ "$STAGE" = "designability" ] && gcloud storage cp "$OF3_CKPT_URI" /workspace/weights/of3-p2-155k.pt
 OF3_BATCH_SHIM="$SPA_REPO/scripts/eval/of3_batch_patch.py"
-. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"   # $ARM -> SAMPLER_ARGS (file is scripts/_sampler_arm.sh, NOT scripts/cloud/; matches run_longfold_steer.sh:112)
-{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
+spa_require_sampler_arm "${BASH_SOURCE[0]}"   # $ARM -> SAMPLER_ARGS (file is scripts/_sampler_arm.sh, NOT scripts/cloud/; matches run_longfold_steer.sh)
 
 # build the fold table: id<TAB>pt_uri<TAB>pdb_uri
 : > "$OUT/folds.tsv"
@@ -103,10 +105,13 @@ PY
   if [ -n "${DRY_RUN:-}" ]; then
     python "$SPA_REPO/scripts/eval/run_flywheel.py" --cfg job "${ARGS[@]}" >/dev/null 2>"$OUT/$id.dry.err" \
       && { log "[$n] $id DRY_RUN parse OK"; ok=$((ok+1)); } || { log "[$n] $id DRY_RUN FAILED"; tail -5 "$OUT/$id.dry.err" >&2; }
+    spa_push_results "$po" "$RESULTS_URI/$STAGE/cells" "$PUSH_MODE"   # prints the planned upload under DRY_RUN
     continue
   fi
   python "$SPA_REPO/scripts/eval/run_flywheel.py" "${ARGS[@]}" </dev/null \
-    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$STAGE/$id.json" 2>/dev/null && log "[$n] $id OK -> $RESULTS_URI/$STAGE/$id.json"; } \
+    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$STAGE/$id.json" 2>/dev/null; \
+         spa_push_results "$po" "$RESULTS_URI/$STAGE/cells" "$PUSH_MODE"; \
+         log "[$n] $id OK -> $RESULTS_URI/$STAGE/$id.json + structures"; } \
     || log "[$n] $id FAILED (continuing)"
 done < "$OUT/folds.tsv"
 log "===== G4-A $STAGE DONE: $ok/$n folds -> $RESULTS_URI/$STAGE ====="

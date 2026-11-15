@@ -23,6 +23,10 @@
 # exact same code path that already works for every other eval in this project.
 set -uo pipefail
 
+# Shared cloud-driver helpers (dev plan/156): retention upload + the invariant preamble steps.
+. "$(dirname "${BASH_SOURCE[0]}")/_cloud_preamble.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/_push_results.sh"
+
 PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 RFD3_FINETUNED_CKPT_URI="${RFD3_FINETUNED_CKPT_URI:-$BUCKET/checkpoints/finetune-A0A7S3EB45-20260814-045849/rfd3_Nx1536_finetuned_full_cloudgen.ckpt}"
@@ -41,9 +45,7 @@ log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 trap 'log "FINETUNE EVAL FAILED at line $LINENO"' ERR
 
 # --- GPU driver-path fix (verbatim from run_smoke.sh) ---
-export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
-export PATH="/usr/local/nvidia/bin:${PATH}"
-ldconfig 2>/dev/null || true
+spa_gpu_ld_path
 ( command -v nvidia-smi >/dev/null && nvidia-smi -L ) || echo "  nvidia-smi: n/a"
 log "GPU sanity, system python (SPA stack):"
 python -c "import torch; assert torch.cuda.is_available(), 'no CUDA'; print('  GPU', torch.cuda.get_device_name(0), 'CUDA', torch.version.cuda)"
@@ -51,8 +53,7 @@ log "GPU sanity, OF3 conda env (triton):"
 conda run -n spa-verify-of3 python -c "import torch, triton; print('  OF3 env: torch', torch.__version__, '| triton', triton.__version__, '| cuda', torch.cuda.is_available())"
 
 # --- SPA repo + ProteinMPNN ---
-[ -d "$SPA_REPO/.git" ] || git clone --depth 1 --branch "${REPO_REF:-main}" "${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}" "$SPA_REPO"
-pip install -e "$SPA_REPO" --no-deps -q
+spa_install_repo "$SPA_REPO"
 [ -d "$MPNN_REPO" ] || git clone --depth 1 https://github.com/dauparas/ProteinMPNN "$MPNN_REPO"
 
 # --- Fetch weights + the target PDB ---
@@ -68,8 +69,7 @@ gcloud storage cp "$TARGET_PDB_URI" /workspace/target.pdb
 # checkpoint's 100 / gamma_0 0.8, ARM=rfd3 is the RFdiffusion3 paper's 200 / 0.6. Always all three
 # knobs together: a partial setting matches neither published configuration.
 ARM="${ARM:-ours}"
-. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
-{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
+spa_require_sampler_arm "${BASH_SOURCE[0]}"
 
 log "config: length=$LENGTH K=$K N=$NSEQ seed=$SEED lambdas=$LAMBDAS"
 
@@ -121,5 +121,6 @@ PY
 
 gcloud storage cp "$OUT/flywheel_results.json" "$RESULTS_URI/A0A7S3EB45_finetune_eval.json" 2>/dev/null
 gcloud storage cp "$OUT/flywheel.log" "$RESULTS_URI/A0A7S3EB45_finetune_eval.log" 2>/dev/null
+spa_push_results "$OUT" "$RESULTS_URI/cells" desig
 log "===== FINETUNE EVAL DONE -> ${RESULTS_URI}/A0A7S3EB45_finetune_eval.json ====="
 exit $STATUS

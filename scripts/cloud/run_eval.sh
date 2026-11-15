@@ -6,6 +6,10 @@
 # NB: NOT `set -e` — a single prompt's failure must not abort the loop.
 set -uo pipefail
 
+# Shared cloud-driver helpers (dev plan/156): retention upload + the invariant preamble steps.
+. "$(dirname "${BASH_SOURCE[0]}")/_cloud_preamble.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/_push_results.sh"
+
 PROJECT="${PROJECT:-spa-dev-499900}"
 BUCKET="${BUCKET:-gs://genomancer-spa-cache}"
 PREP_URI="${PREP_URI:-$BUCKET/eval/b1_full/prep}"           # prep artifacts (.pt/.pdb + b1_full_resolved.json)
@@ -19,22 +23,19 @@ MPNN_REPO="${MPNN_REPO:-/opt/ProteinMPNN}"
 # could set the step count while leaving gamma_0 at the checkpoint's 0.8, i.e. a configuration
 # matching neither the paper nor the checkpoint (dev docs/plan/81 §7).
 ARM="${ARM:-ours}"
-. "$(dirname "${BASH_SOURCE[0]}")/../_sampler_arm.sh"
-{ [ -n "${SAMPLER_ARGS+x}" ] && [ "${#SAMPLER_ARGS[@]}" -eq 3 ]; } || { echo "FATAL: _sampler_arm.sh did not load (wrong include path or missing file) -- refusing to run at the inherited checkpoint sampler instead of the requested ARM. See the run_g4a 2026-10-31 bug." >&2; exit 2; }
+spa_require_sampler_arm "${BASH_SOURCE[0]}"
 PREP=/workspace/prep
 OUT=/workspace/b1_out
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 
 # --- GPU sanity (both stacks) ---
-export LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH:-}"
-export PATH="/usr/local/nvidia/bin:${PATH}"; ldconfig 2>/dev/null || true
+spa_gpu_ld_path
 python -c "import torch; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0))"
 conda run -n spa-verify-of3 python -c "import torch, triton; print('OF3 env: triton', triton.__version__, '| cuda', torch.cuda.is_available())"
 
 # --- SPA repo + ProteinMPNN ---
-[ -d "$SPA_REPO/.git" ] || git clone --depth 1 --branch "${REPO_REF:-main}" "${REPO_URL:-https://github.com/GreggHelt2/structure-prompt-adapter}" "$SPA_REPO"
-pip install -e "$SPA_REPO" --no-deps -q
+spa_install_repo "$SPA_REPO"
 [ -d "$MPNN_REPO" ] || git clone --depth 1 https://github.com/dauparas/ProteinMPNN "$MPNN_REPO"
 
 # --- Fetch weights + prep artifacts ---
@@ -84,7 +85,9 @@ while IFS=$'\t' read -r id contig; do
     +eval.flywheel.refolder.runner_yaml="$SPA_REPO/configs/of3/of3_triton.yml" \
     +eval.flywheel.refolder.out_dir="$po" \
     eval.out_dir="$po" </dev/null \
-    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$id.json" 2>/dev/null && log "[$n] $id OK -> staged $RESULTS_URI/$id.json"; } \
+    && { ok=$((ok+1)); gcloud storage cp "$po/flywheel_results.json" "$RESULTS_URI/$id.json" 2>/dev/null; \
+         spa_push_results "$po" "$RESULTS_URI/cells" desig; \
+         log "[$n] $id OK -> staged $RESULTS_URI/$id.json + structures"; } \
     || log "[$n] $id FAILED (continuing)"
 done < "$OUT/prompts.tsv"
 log "===== B1-FULL DONE: $ok/$n prompts succeeded -> $RESULTS_URI ====="
