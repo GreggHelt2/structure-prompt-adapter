@@ -203,11 +203,150 @@ def describe_conditioning(cfg) -> dict[str, Any] | None:
     return rec
 
 
+# ---------------------------------------------------------------------------
+# SPA conditioning capture (dev plan/159b). The design-side λ profile and the prompt-side selection are
+# armed POST-COMPOSE via set_profile/set_prompts and serialize NOWHERE on their own, so this block records
+# them explicitly: per soft prompt the PROMPT-side selection (which prompt rows the design attends to) and
+# the DESIGN-side selection (which design residues it steers), plus any Fixed Motif's source->design span.
+# The main generate.py path derives it from `cfg` (describe_spa_conditioning); the probe drivers, which arm
+# several prompts in Python, build it with the helpers below and pass `collect(spa_conditioning=...)`.
+#
+# ⚠️ CONVENTION: every prompt-frame and design-frame span is HALF-OPEN [lo, hi), matching
+# `eval.profile.steered` (generate.py:985-997) and `eval.subregion.keep_range` (generate.py:706-726).
+# ---------------------------------------------------------------------------
+
+def prompt_whole() -> dict[str, Any]:
+    """Prompt-side selection: the design attends to the WHOLE fold prompt."""
+    return {"kind": "whole", "keep_range": None, "keep": None, "M_attended": None}
+
+
+def prompt_keep_range(a: int, b: int) -> dict[str, Any]:
+    """Prompt-side selection: attend to prompt rows [a, b) only (eval.subregion.keep_range)."""
+    a, b = int(a), int(b)
+    return {"kind": "keep_range", "keep_range": [a, b], "keep": None, "M_attended": b - a}
+
+
+def design_whole() -> dict[str, Any]:
+    """Design-side selection: steer EVERY design residue (uniform λ, no profile)."""
+    return {"kind": "whole", "spans": None, "n_steered": None, "lambda_region": None}
+
+
+def design_span(lo: int, hi: int, *, lambda_region: float | None = None) -> dict[str, Any]:
+    """Design-side selection: steer design residues [lo, hi) (one boxcar span of the λ profile)."""
+    lo, hi = int(lo), int(hi)
+    return {"kind": "profile", "spans": [[lo, hi]], "n_steered": hi - lo, "lambda_region": lambda_region}
+
+
+def soft_slot(prompt_id, prompt_source=None, *, prompt_side=None, design_side=None) -> dict[str, Any]:
+    """One soft-prompt slot for `spa_conditioning(...)`. `prompt_side`/`design_side` default to whole."""
+    return {"prompt_id": prompt_id,
+            "prompt_source": (str(prompt_source) if prompt_source else None),
+            "prompt_side": prompt_side or prompt_whole(),
+            "design_side": design_side or design_whole()}
+
+
+def motif_slot(source, source_span=None, design=None) -> dict[str, Any]:
+    """One Fixed Motif slot: source structure, its source span (contig/seg), and the design-frame extent
+    [lo, hi) (min..max of the motif residues; exact segments live in `source_span`)."""
+    return {"source": (str(source) if source is not None else None),
+            "source_span": (str(source_span) if source_span is not None else None),
+            "design_span": ([int(design[0]), int(design[1])] if design is not None else None)}
+
+
+def spa_conditioning(*, soft=(), motif=(), source: str = "driver") -> dict[str, Any] | None:
+    """Assemble a `spa_conditioning` block from slot dicts (`soft_slot`/`motif_slot`), numbering the slots
+    1..N. Returns None when BOTH are empty (a baseline arm, which must carry no block, dev plan/159 §4.1)."""
+    soft = list(soft or [])
+    motif = list(motif or [])
+    if not soft and not motif:
+        return None
+    for i, s in enumerate(soft, 1):
+        s["slot"] = i
+    for i, m in enumerate(motif, 1):
+        m["slot"] = i
+    return {"capture_source": source, "n_soft_prompts": len(soft), "n_fixed_motifs": len(motif),
+            "soft_prompts": soft, "fixed_motifs": motif}
+
+
+def describe_spa_conditioning(cfg) -> dict[str, Any] | None:
+    """The SPA conditioning this run armed, derived from `cfg.eval` (the main generate.py path, which has at
+    most one soft prompt). The probe drivers pass an explicit block via `collect(spa_conditioning=...)`.
+
+    Returns None for a run with NO soft prompt AND no Fixed Motif (a plain unconditional/baseline run), so
+    those gain no block. Best-effort: the caller wraps this; a failure must not block a run.
+
+    ⚠️ Scope: the block records the SPA arming for this INVOCATION (the `spa` condition's designs). A
+    multi-condition run (`conditions=[baseline, spa]`) applies the soft prompt only to its `spa` designs; a
+    Fixed Motif, when present, applies to every condition (baseline = motif-only, spa = motif+SPA,
+    generate.py:1059). The condition axis on the design/cell, not this block, says which parts a design used.
+    """
+    try:
+        ev = cfg.eval
+    except Exception:
+        return None
+
+    conditions = _plain(ev.get("conditions", None)) or []
+    if isinstance(conditions, str):
+        conditions = [conditions]
+
+    soft: list[dict[str, Any]] = []
+    src = ev.get("prompt_pdb", None) or ev.get("prompt_cache", None)
+    if "spa" in conditions and src:  # a real soft prompt only; a "spa" arm with no prompt emits no slot
+        pr = describe_prompt(src)
+        # prompt-side selection: eval.subregion (keep_range / keep), else whole
+        ps = prompt_whole()
+        sr = ev.get("subregion", None)
+        if sr is not None:
+            kr = sr.get("keep_range", None) if hasattr(sr, "get") else None
+            keep = sr.get("keep", None) if hasattr(sr, "get") else None
+            if kr is not None:
+                kr = _plain(kr)
+                ps = prompt_keep_range(kr[0], kr[1])
+            elif keep is not None:
+                keep = [int(i) for i in _plain(keep)]
+                ps = {"kind": "keep", "keep_range": None, "keep": keep, "M_attended": len(keep)}
+        # design-side selection: eval.profile.steered (half-open spans), else whole
+        ds = design_whole()
+        prof = ev.get("profile", None)
+        if prof is not None:
+            steered = _plain(prof.get("steered", None)) if hasattr(prof, "get") else None
+            if steered:
+                spans = [[int(s[0]), int(s[1])] for s in steered]
+                ds = {"kind": "profile", "spans": spans,
+                      "n_steered": sum(hi - lo for lo, hi in spans), "lambda_region": None}
+        soft.append(soft_slot(pr.get("id"), pr.get("source"), prompt_side=ps, design_side=ds))
+
+    motif: list[dict[str, Any]] = []
+    m = ev.get("motif", None)
+    if m:
+        source = _plain(m.get("source_pdb", None)) if hasattr(m, "get") else None
+        contig = _plain(m.get("contig", None)) if hasattr(m, "get") else None
+        src_span = contig if contig else (_plain(m.get("unindex", None)) if hasattr(m, "get") else None)
+        dspan = None
+        if contig:
+            try:  # deferred import: generate imports this module at load time
+                from .generate import _parse_contig_motif_indices
+                res = sorted(_parse_contig_motif_indices(str(contig)))
+                if res:
+                    dspan = [res[0], res[-1] + 1]  # half-open extent
+            except Exception:
+                dspan = None
+        motif.append(motif_slot(source, src_span, dspan))
+
+    return spa_conditioning(soft=soft, motif=motif, source="cfg")
+
+
 def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
-            extra: dict | None = None, started: str | None = None) -> dict[str, Any]:
-    """Assemble the provenance record. Never raises."""
+            extra: dict | None = None, spa_conditioning=None,
+            started: str | None = None) -> dict[str, Any]:
+    """Assemble the provenance record. Never raises.
+
+    ``spa_conditioning``: an explicit block (from the `spa_conditioning(...)` builder) that OVERRIDES the
+    cfg-derived one, for drivers that arm prompts in Python (dev plan/159b §3.2). When None, the block is
+    derived from ``cfg`` via ``describe_spa_conditioning``.
+    """
     rec: dict[str, Any] = {
-        "schema": "spa-run-provenance/1",
+        "schema": "spa-run-provenance/2",
         "purpose": purpose,
         "scope": scope,
         "started_pacific": started,
@@ -267,8 +406,10 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
                                       **_det_state()}
             except Exception:
                 pass
+            # `batch_size` added 2026-11-15 (dev plan/159b §3.4): it is results-affecting and part of the
+            # reproducibility identity (dev plan/159a §2.3), not a throughput knob.
             rec["proteinmpnn"] = {k: _plain(ev.proteinmpnn.get(k, None))
-                                  for k in ("seed", "num_seqs", "sampling_temp")} \
+                                  for k in ("seed", "num_seqs", "sampling_temp", "batch_size")} \
                 if ev.get("proteinmpnn", None) is not None else None
             # The REFOLD stage's oracle identity. Recorded because its ABSENCE is indistinguishable
             # from its being off: queue row 25 generated deterministically and refolded on STOCK
@@ -300,8 +441,15 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
                         # None means "take the refolder's default", which IS deterministic.
                         "deterministic_default_applies": _req is None,
                         "contract": None if _req is False else OF3Refolder.of3_contract(),
+                        # `contract_applied` is the EFFECT, read from the subprocess CONTRACT banner by
+                        # `write()` when the log already exists (refold-only re-runs); None here otherwise,
+                        # resolved loader-side (dev plan/159b §3.4/§5). `contract` above is only intent.
+                        "contract_applied": None,
                         "runner_yaml": _plain(_rf.get("runner_yaml", None)),
                         "use_msa_server": _plain(_rf.get("use_msa_server", None)),
+                        # `batch_size` (bs): results-affecting QUERY batch, part of the reproducibility
+                        # identity (dev plan/159a §2.3); not the same knob as RFD3's K (dev plan/100 §9).
+                        "batch_size": _plain(_rf.get("batch_size", None)),
                         "num_diffusion_samples": _plain(_rf.get("num_diffusion_samples", None)),
                         "ckpt": _file_id(_rf.get("ckpt_path", None))
                         if _rf.get("ckpt_path", None) else None,
@@ -341,6 +489,16 @@ def collect(cfg=None, *, prompts=None, purpose=None, scope=None,
                 )
         except Exception as exc:
             rec["anomalies"].append(f"conditioning capture failed: {type(exc).__name__}: {exc}")
+
+    # SPA conditioning block (dev plan/159b): an explicit block (drivers that arm in Python) wins; else
+    # derive it from cfg for the main generate.py path. Best-effort; a failure records an anomaly only.
+    try:
+        block = spa_conditioning if spa_conditioning is not None else (
+            describe_spa_conditioning(cfg) if cfg is not None else None)
+        if block:
+            rec["spa_conditioning"] = _plain(block)
+    except Exception as exc:
+        rec["anomalies"].append(f"spa_conditioning capture failed: {type(exc).__name__}: {exc}")
 
     not_heldout = [p["id"] for p in rec.get("prompts", []) if p.get("split") not in (None, "test")]
     if not_heldout:
@@ -393,6 +551,26 @@ def _plain(v):
     return v
 
 
+def of3_contract_applied(out_dir) -> int | None:
+    """The OF3 determinism contract the shim ACTUALLY applied, read from the subprocess CONTRACT banner
+    (``<out_dir>/of3_batch/of3_subprocess.log``), as an int, or None when the log is absent (the provenance
+    write usually PRECEDES the refold, dev plan/159b §3.4) or the shim stood down (stock).
+
+    ⚠️ Anchored on the ``[of3_determinism_patch] contract v{N}`` banner line (of3_determinism_patch.py:183),
+    NOT a bare ``contract v\\d`` — the same file prints a warning line containing "contract v1 or v2" that
+    a loose pattern would false-match. Best-effort; never raises.
+    """
+    try:
+        log = Path(str(out_dir)) / "of3_batch" / "of3_subprocess.log"
+        if not log.is_file():
+            return None
+        import re
+        m = re.search(r"\[of3_determinism_patch\]\s+contract\s+v(\d+)", log.read_text(errors="ignore"))
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
 def write(out_dir, cfg=None, **kw) -> str | None:
     """Write ``RUN_PROVENANCE.json`` into ``out_dir``. Returns the path, or None on failure.
 
@@ -409,6 +587,15 @@ def write(out_dir, cfg=None, **kw) -> str | None:
             path = d / f"{Path(FILENAME).stem}.{n}.json"
             n += 1
         rec = collect(cfg, **kw)
+        # The APPLIED OF3 contract (effect), if the refold already ran so its banner exists (refold-only
+        # re-runs write provenance post-refold). None otherwise -> resolved loader-side (dev plan/159b §5).
+        try:
+            if isinstance(rec.get("openfold3"), dict):
+                ca = of3_contract_applied(out_dir)
+                if ca is not None:
+                    rec["openfold3"]["contract_applied"] = ca
+        except Exception:
+            pass
         path.write_text(json.dumps(rec, indent=2, default=str))
         warn = [a for a in rec.get("anomalies", []) if a.startswith("PROMPTS NOT HELD OUT")]
         for w in warn:

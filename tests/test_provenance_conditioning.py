@@ -49,4 +49,4 @@ def test_the_disclosure_reaches_anomalies_where_a_reader_will_see_it():
 def test_collect_never_raises_on_a_malformed_config():
     """Provenance must never take down a run that has already spent GPU time."""
     rec = collect(OmegaConf.create({"eval": {"specification": {"ligand": "IAI"}}}))
-    assert rec["schema"] == "spa-run-provenance/1"
+    assert rec["schema"] == "spa-run-provenance/2"

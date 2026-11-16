@@ -67,11 +67,11 @@ def test_the_msa_setting_is_recorded_because_it_is_part_of_the_oracle():
 def test_a_generation_only_run_records_no_refold_block():
     rec = collect(_cfg(__none__=True))
     assert rec.get("openfold3") is None
-    assert rec["schema"] == "spa-run-provenance/1"
+    assert rec["schema"] == "spa-run-provenance/2"
 
 
 def test_a_malformed_refolder_never_takes_down_a_run():
     """Provenance must never fail a run that has already spent GPU time."""
     cfg = OmegaConf.create({"eval": {"out_dir": "/tmp/x", "flywheel": {"refolder": "not-a-dict"}}})
     rec = collect(cfg)
-    assert rec["schema"] == "spa-run-provenance/1"
+    assert rec["schema"] == "spa-run-provenance/2"
