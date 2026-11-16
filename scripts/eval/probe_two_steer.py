@@ -65,6 +65,7 @@ from probe_hard_soft_free import (
     DEFAULT_CKPT, DEFAULT_PDB_DIR, _ca, _contiguous, _mean, _pair_tm, _precompute_prompt,
     _profile, _resolve_pdb, _rfd3_ckpt, _seg_len, _slice_tm, build_contig, build_partition,
 )
+from spa.eval import provenance as _prov  # SPA conditioning capture (dev plan/159b)
 
 # target token → (which precomputed prompt, human label). "free" is handled separately (no prompt).
 _TARGETS = ("free", "g1", "g2")
@@ -315,6 +316,28 @@ def run_two_steer(args):
 
     edir = out_dir / f"{args.motif_source}_{args.g1}x{args.g2}_R1{r1_len}M{len(M_idx)}R2{r2_len}"
     edir.mkdir(parents=True, exist_ok=True)
+
+    # Provenance: record the SPA conditioning MENU for this run (dev plan/159b, option A). The cells loop
+    # below arms a different subset per cell; each design's `condition` (cname) selects which slots applied.
+    # Spans are half-open [lo, hi) (as _contiguous returns). The slot's prompt binding is NOMINAL (g1->R1,
+    # g2->R2); a swap cell (e.g. g2:g1) rebinds, carried by the design's condition, not here (plan/159 §4.2a).
+    try:
+        _soft = []
+        if any(c[0] != "free" for c in cells):               # some cell steers R1
+            _pg1 = _prov.describe_prompt(g1_pdb)
+            _soft.append(_prov.soft_slot(_pg1["id"], _pg1["source"],
+                                         design_side=_prov.design_span(r1_lo, r1_hi, lambda_region=lr1)))
+        if any(c[1] != "free" for c in cells):               # some cell steers R2
+            _pg2 = _prov.describe_prompt(g2_pdb)
+            _soft.append(_prov.soft_slot(_pg2["id"], _pg2["source"],
+                                         design_side=_prov.design_span(r2_lo, r2_hi, lambda_region=lr2)))
+        _motif = [_prov.motif_slot(motif_pdb, args.motif_seg, [m_lo, m_hi])] if M_idx else []
+        _prov.write(edir, cfg,
+                    spa_conditioning=_prov.spa_conditioning(soft=_soft, motif=_motif),
+                    purpose=f"two-steer composability {args.g1}x{args.g2}",
+                    scope="RFD3+SPA generation + per-cell region scoring (no refold in this driver)")
+    except Exception as _exc:
+        print(f"[2steer] provenance capture skipped: {type(_exc).__name__}: {_exc}")
 
     base_rows, results = None, []
     for (t1, t2) in cells:
