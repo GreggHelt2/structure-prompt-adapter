@@ -66,7 +66,32 @@ _pin_image() {
   fi
 }
 
+# --- GUARD: the resolved REPO_REF must be a FETCHABLE remote ref ------------------------------
+# WHY (2026-11-15, after a REPO_REF=<sha> smoke died in BOOT). $REPO_REF is interpolated into
+# $BOOT_CHECKOUT as `git fetch --depth 1 origin $REPO_REF`, run on the Vertex VM. GitHub's shallow
+# fetch resolves a BRANCH or TAG name but NOT a bare commit SHA, so a REPO_REF=<sha> dies on the VM
+# with `fatal: couldn't find remote ref <sha>` AFTER the job has provisioned an H100 (BOOT exit 128).
+# Every historical cloud run used REPO_REF=main (a branch); a session that "pins" a SHA for
+# reproducibility silently breaks instead. Catch it at SUBMIT, where it costs nothing, not on the VM.
+# ⛔ This REJECTS SHA pinning rather than making it work: real SHA pinning would need BOOT_CHECKOUT to
+# do a full (non-shallow) fetch then checkout the sha, a separate change. Since shallow SHA-fetch is
+# broken anyway, a clear rejection is the right behavior.
+_validate_repo_ref() {
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  if ! git -C "$repo_root" ls-remote --exit-code origin "$REPO_REF" >/dev/null 2>&1; then
+    echo "FATAL: REPO_REF='${REPO_REF}' is not a branch or tag on origin." >&2
+    echo "       The Vertex BOOT runs 'git fetch --depth 1 origin ${REPO_REF}', and GitHub's shallow" >&2
+    echo "       fetch cannot resolve a bare commit SHA, so the job would die with" >&2
+    echo "       'couldn't find remote ref ${REPO_REF}' AFTER provisioning the H100." >&2
+    echo "       Use a branch or tag name, or leave REPO_REF=main (the default every prior run used)." >&2
+    exit 2
+  fi
+  echo ">>> [pin] REPO_REF '${REPO_REF}' verified as a fetchable remote ref" >&2
+}
+
 _pin_repo_ref
+_validate_repo_ref
 _pin_image
 
 # Checkout that works for a branch, a tag OR a sha. `git clone --branch` does not accept a sha, which
