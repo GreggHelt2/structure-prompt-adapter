@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# fetch_run.sh — download an H100 cloud run's results from GCS to the LOCAL mirror, COPY-ONLY.
+# download_gcs_to_local.sh — download an H100 cloud run's results from GCS to the LOCAL mirror, COPY-ONLY.
+# ⇕ COUNTERPART of the dev-repo scripts/tools/promote_run.sh: that one goes LOCAL-origin -> census + GCS
+#   archive (and re-uploads); THIS one is the cloud -> local direction and NEVER re-uploads. For a
+#   cloud-origin run (already in gs://.../eval/), use THIS, not promote_run.sh (which would 2x it in GCS).
 #
 # WHY THIS EXISTS (2026-11-16). Cloud (Vertex H100) jobs push their outputs to gs://$BUCKET/eval/<family>
 # (and /results/), which is the primary GCS copy. The convention for getting them local for analysis is a
@@ -9,13 +12,13 @@
 # automation: one conventional command to pull a run local.
 #
 # ⛔ THIS IS NOT promote_run.sh. Promotion re-archives the run as a tarball to gs://.../outputs-archive/,
-#    which for a CLOUD-origin run (already in gs://.../eval/) is a redundant SECOND GCS copy. fetch_run.sh
+#    which for a CLOUD-origin run (already in gs://.../eval/) is a redundant SECOND GCS copy. This script
 #    only ever COPIES DOWN: the GCS source is never modified, deleted, or re-uploaded.
 #
 # Usage:
-#   fetch_run.sh <family> [--prefix eval|results] [--dry-run]
+#   download_gcs_to_local.sh <family> [--prefix eval|results] [--dry-run]
 #       mirror gs://$BUCKET/<prefix>/<family>  ->  $MIRROR/<prefix>/<family>   (prefix default: eval)
-#   fetch_run.sh --gcs <gs://...> --dest <localdir> [--dry-run]
+#   download_gcs_to_local.sh --gcs <gs://...> --dest <localdir> [--dry-run]
 #       mirror an arbitrary GCS prefix to an arbitrary local dir (same copy-only semantics)
 #
 # Env: BUCKET (default gs://genomancer-spa-cache), SPA_PROJECT_ROOT (default /home/user1/projects/spa),
@@ -35,7 +38,7 @@ while [ $# -gt 0 ]; do
     --gcs) GCS="$2"; shift 2 ;;
     --dest) DEST="$2"; shift 2 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
-    -*) echo "fetch_run.sh: unknown flag $1" >&2; exit 2 ;;
+    -*) echo "download_gcs_to_local.sh: unknown flag $1" >&2; exit 2 ;;
     *) FAMILY="$1"; shift ;;
   esac
 done
@@ -58,7 +61,7 @@ if ! "$GCLOUD" storage ls "$SRC" >/dev/null 2>&1; then
   exit 2
 fi
 
-echo ">>> fetch_run: COPY-ONLY mirror (GCS source is never modified)"
+echo ">>> download_gcs_to_local: COPY-ONLY mirror (GCS source is never modified)"
 echo "    source: $SRC"
 echo "    dest:   $DEST"
 mkdir -p "$DEST"
@@ -75,4 +78,4 @@ fi
 
 echo ">>> rsync (copy-only) ..."
 "$GCLOUD" storage rsync -r "$SRC" "$DEST"
-echo ">>> fetch_run DONE: $SRC -> $DEST (GCS unchanged)"
+echo ">>> download_gcs_to_local DONE: $SRC -> $DEST (GCS unchanged)"
