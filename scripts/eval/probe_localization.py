@@ -250,6 +250,22 @@ def _run_example(ex, prompt_cache_pt, ckpt, lambdas, K, seed, sampler, feather, 
         conds.append((f"global_l{lam:g}", "spa", None, lam))
 
     edir = out_dir / ex["name"]; edir.mkdir(parents=True, exist_ok=True)
+
+    # Provenance: the SPA conditioning menu (dev plan/159b, option A). One soft prompt (foreign fold G);
+    # its design region VARIES by condition (localized S=[0,b) / feather / global=whole) and λ is swept, so
+    # both are per-condition properties: the slot records design=whole, and b + lambdas go to `extra`; each
+    # design's `condition` (cname) + b give its actual region. No hard motif (plan/159 §4.2a).
+    try:
+        from spa.eval import provenance as _prov
+        _prov.write(edir, cfg,
+                    spa_conditioning=_prov.spa_conditioning(soft=[
+                        _prov.soft_slot(str(G), str(prompt_cache_pt), design_side=_prov.design_whole())]),
+                    extra={"boundary_b": b, "lambdas": list(lambdas)},
+                    purpose=f"localization probe {ex['name']}",
+                    scope="RFD3+SPA generation + S/F region scoring; design region and lambda vary by condition")
+    except Exception as _exc:
+        print(f"[loc] provenance capture skipped: {type(_exc).__name__}: {_exc}")
+
     per_design = []          # rows: condition, idx, tm_S, tm_F
     free_F_ca = {}           # idx -> Cα of free design's F region (for displacement pairing)
     for (cname, mode, prof, lam) in conds:

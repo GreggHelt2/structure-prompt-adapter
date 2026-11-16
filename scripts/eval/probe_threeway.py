@@ -95,6 +95,22 @@ def main(cfg: DictConfig) -> None:
         out_dir = Path.cwd() / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Provenance: the SPA conditioning menu (dev plan/159b, option A). ONE soft prompt steers a design
+    # region that VARIES by condition (full=whole / threeway=[0,boundary) / feather / combo), so the region
+    # is a per-condition property: the slot records design=whole and `boundary` goes to `extra`; each
+    # design's `condition` (name) + boundary give its actual region. No hard motif here (plan/159 §4.2a).
+    try:
+        from spa.eval import provenance as _prov
+        _pr = _prov.describe_prompt(str(ev.prompt_pdb))
+        _prov.write(out_dir, cfg,
+                    spa_conditioning=_prov.spa_conditioning(soft=[
+                        _prov.soft_slot(_pr["id"], _pr["source"], design_side=_prov.design_whole())]),
+                    extra={"probe_boundary": boundary, "probe_feather_w": feather_w},
+                    purpose="three-way localization (B/C design-side steering)",
+                    scope="RFD3+SPA generation + region scoring; design region varies by condition")
+    except Exception as _exc:
+        print(f"[probe] provenance capture skipped: {type(_exc).__name__}: {_exc}")
+
     print(f"[probe] L={L} K={K} λ={lam} boundary={boundary} feather_w={feather_w}")
     print(f"[probe] state B = residues [0,{boundary}) steered; state C = [{boundary},{L}) silent")
 

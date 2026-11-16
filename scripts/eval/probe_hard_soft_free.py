@@ -421,6 +421,24 @@ def run_grid(args):
         edir = out_dir / f"{layout}_{args.motif_source}_{args.target}_M{len(M_idx)}U{len(U_idx)}C{len(C_idx)}"
         edir.mkdir(parents=True, exist_ok=True)
 
+        # Provenance: the SPA conditioning menu (dev plan/159b, option A). One soft prompt (target fold G)
+        # steers the run-fixed U region [u_lo,u_hi); one hard motif pins M. λ is swept, so it is a
+        # per-condition property (in each design's condition, not the slot); lambdas -> extra.
+        try:
+            from spa.eval import provenance as _prov
+            _ptg = _prov.describe_prompt(target_pdb)
+            _prov.write(edir, cfg,
+                        spa_conditioning=_prov.spa_conditioning(
+                            soft=[_prov.soft_slot(_ptg["id"], _ptg["source"],
+                                                  design_side=_prov.design_span(u_lo, u_hi))],
+                            motif=([_prov.motif_slot(motif_pdb, args.motif_seg, [m_lo, m_hi])]
+                                   if M_idx else [])),
+                        extra={"lambdas": lambdas, "layout": layout},
+                        purpose=f"hard-soft-free {args.motif_source}+{args.target}",
+                        scope="RFD3+SPA generation + region scoring; lambda swept per condition")
+        except Exception as _exc:
+            print(f"[hsf] provenance capture skipped: {type(_exc).__name__}: {_exc}")
+
         # baseline (motif-only, SPA off) — ONCE per layout, reused for every λ (λ-independent).
         adapter.clear_prompt(); adapter.set_profile(None)
         _seed_all(int(args.seed))
