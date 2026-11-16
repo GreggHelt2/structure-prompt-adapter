@@ -90,9 +90,42 @@ _validate_repo_ref() {
   echo ">>> [pin] REPO_REF '${REPO_REF}' verified as a fetchable remote ref" >&2
 }
 
+# --- GUARD: refuse a 2nd job in a region that already has one (H100 quota = 1 per region) ------
+# WHY (2026-11-15, after 6 jobs were submitted at once against the quota). H100 quota is 1
+# a3-highgpu-1g PER REGION (the always-loaded `h100-quota-per-region` memory): a 2nd job in a region
+# whose slot is taken just sits quota-blocked in us-west1, and in us-central1 FAILS after ~80 min with
+# a capacity timeout. The convention is to CHAIN one job per region (watch_job.sh -> launch next). This
+# catches a double-submit at SUBMIT time, at zero cost, before a job is created.
+# ⛔ Checks THIS project's jobs in the region; a separate GCP project sharing the account is not seen.
+# Skipped under DRY_RUN (previewing creates nothing). Deliberate queue: SPA_ALLOW_REGION_BUSY=<reason 12+ chars>.
+_validate_region_free() {
+  [ "${DRY_RUN:-0}" = "1" ] && return 0
+  local region="${REGION:-}" reason="${SPA_ALLOW_REGION_BUSY:-}" busy
+  [ -n "$region" ] || { echo ">>> [pin] REGION unset at guard time; skipping region-occupancy check" >&2; return 0; }
+  if [ -n "$reason" ]; then
+    [ "${#reason}" -ge 12 ] || { echo "FATAL: SPA_ALLOW_REGION_BUSY must state a reason of 12+ chars." >&2; exit 2; }
+    echo ">>> [pin] SPA_ALLOW_REGION_BUSY set ($reason); skipping the region-occupancy check" >&2
+    return 0
+  fi
+  busy="$("${GCLOUD:-gcloud}" ai custom-jobs list --project="${PROJECT:-spa-dev-499900}" \
+            --region="$region" --filter='state=JOB_STATE_RUNNING OR state=JOB_STATE_PENDING' \
+            --format='value(name)' 2>/dev/null | head -3)"
+  if [ -n "$busy" ]; then
+    echo "FATAL: region $region already has a RUNNING/PENDING job; H100 quota is 1 per region." >&2
+    echo "       A 2nd job just sits quota-blocked (us-west1) or FAILS after ~80 min (us-central1)." >&2
+    echo "       CHAIN instead: watch the running job (scripts/cloud/watch_job.sh <id> $region)," >&2
+    echo "       then submit the next when it finishes. Occupying job(s):" >&2
+    echo "$busy" | sed 's/^/         /' >&2
+    echo "       To queue deliberately anyway: SPA_ALLOW_REGION_BUSY='<reason, 12+ chars>'." >&2
+    exit 2
+  fi
+  echo ">>> [pin] region $region is free (no running/pending job)" >&2
+}
+
 _pin_repo_ref
 _validate_repo_ref
 _pin_image
+_validate_region_free
 
 # Checkout that works for a branch, a tag OR a sha. `git clone --branch` does not accept a sha, which
 # is why this replaces the previous clone line rather than parameterizing it.
