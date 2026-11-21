@@ -241,7 +241,18 @@ def _profile(L, U_idx, device, feather_width=0, shape="cosine"):
 
 
 def _precompute_prompt(target_pdb, strip, device, out_dir):
+    import os
     import torch
+
+    stem = Path(target_pdb).stem
+    # ⭐ Reuse a SHARED ESM3 prompt cache when SPA_PROMPT_CACHE is set: a prompt embedding depends ONLY
+    # on the fold, so a multi-cell sweep must reload ESM3 at most once per fold, not once per cell (the
+    # per-cell reload made the M1-breadth cloud sweep ~12x too slow; dev plan/161). Env unset ⇒ unchanged.
+    shared = os.environ.get("SPA_PROMPT_CACHE")
+    if shared:
+        sp = Path(shared) / f"{stem}.pt"
+        if sp.exists():
+            return sp
 
     from spa.prompt.esm3_prompt import esm3_prompt, load_esm3
 
@@ -255,8 +266,11 @@ def _precompute_prompt(target_pdb, strip, device, out_dir):
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    out = cdir / f"{Path(target_pdb).stem}.pt"
+    out = cdir / f"{stem}.pt"
     torch.save(p, out)
+    if shared:
+        Path(shared).mkdir(parents=True, exist_ok=True)
+        torch.save(p, Path(shared) / f"{stem}.pt")   # populate shared cache for the rest of the sweep
     print(f"[hsf] ESM3 prompt G: [{p.shape[0]},{p.shape[1]}] -> {out}")
     return out
 

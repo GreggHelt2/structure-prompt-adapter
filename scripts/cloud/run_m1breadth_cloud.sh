@@ -59,6 +59,9 @@ export RFD3_CKPT=/workspace/weights/rfd3_latest.ckpt
 export OF3_CKPT=/workspace/weights/of3-p2-155k.pt
 if [ "$STAGE" = "designability" ]; then export OF3_RUNNER_YAML="$SPA_REPO/configs/of3/of3_nokernel.yml"; fi
 export PROTEINMPNN_REPO="$MPNN_REPO"
+# ⭐ SHARED ESM3 prompt cache: embed each fold ONCE, not once per cell (dev plan/161; the per-cell
+# ESM3 reload made the sweep ~12x too slow). probe_two_steer/_precompute_prompt reuses this across cells.
+export SPA_PROMPT_CACHE=/workspace/prompt_cache; mkdir -p "$SPA_PROMPT_CACHE"
 SPA_CKPT=/workspace/weights/spa_multigran.pt
 R2_LEN=$(glen "$G2")
 log "R2=$G2 |R2|=$R2_LEN ; sampler arm=$ARM (200/0.6/1.5) ; K=$K N=$NSEQ ; stage=$STAGE"
